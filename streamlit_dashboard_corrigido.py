@@ -8,6 +8,55 @@ import plotly.graph_objects as go
 import plotly.express as px
 import time
 
+st.set_page_config(layout="wide")
+def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
+    df['DataStr'] = df.index.strftime("%d %b")
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df['DataStr'], open=df['Open'], high=df['High'],
+                                 low=df['Low'], close=df['Close'], name='Candlestick'))
+    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['SMA50'], mode='lines',
+                             line=dict(color='white'), name='Média 50 dias'))
+    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['High20'], line=dict(color='orange', dash='dot'),
+                             name='Resistência'))
+    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['suporte'], line=dict(color='blue', dash='dot'),
+                             name='Suporte'))
+    fig.add_trace(go.Bar(x=df['DataStr'], y=df['momentum'],
+                         marker_color=['aqua' if m > 0 else 'red' for m in df['momentum']],
+                         name='Momentum'))
+    df_up = df[df['momentum_up']]
+    df_rompe = df[df['rompe_resistencia']]
+    fig.add_trace(go.Scatter(x=df_up['DataStr'], y=df_up['High'] * 1.02,
+                             mode='markers', marker=dict(symbol='triangle-up', color='violet', size=10),
+                             name='Momentum Up'))
+    fig.add_trace(go.Scatter(x=df_rompe['DataStr'], y=df_rompe['High'] * 1.05,
+                             mode='markers', marker=dict(symbol='diamond', color='lime', size=10),
+                             name='Rompimento'))
+
+    if vcp_detectado:
+        last_index = df['DataStr'].iloc[-1]
+        last_price = df['Close'].iloc[-1]
+        fig.add_trace(go.Scatter(
+            x=[last_index],
+            y=[last_price * 1.08],
+            mode='markers',
+            marker=dict(symbol='star-diamond', color='magenta', size=14),
+            name='Padrão VCP'
+        ))
+
+    PP, suportes, resistencias = calcular_pivot_points(df)
+    for s in suportes:
+        fig.add_shape(type='rect', x0=df['DataStr'].iloc[0], x1=df['DataStr'].iloc[-1],
+                      y0=s * 0.997, y1=s * 1.003, fillcolor='rgba(0,0,255,0.1)', layer='below', line_width=0)
+    for r in resistencias:
+        fig.add_shape(type='rect', x0=df['DataStr'].iloc[0], x1=df['DataStr'].iloc[-1],
+                      y0=r * 0.997, y1=r * 1.003, fillcolor='rgba(255,0,0,0.1)', layer='below', line_width=0)
+
+    fig.update_layout(template='plotly_dark', height=600, hovermode='x unified',
+                      xaxis_rangeslider_visible=False,
+                      xaxis=dict(type='category', tickangle=-45),
+                      yaxis=dict(side='right', title='Preço'))
+    return fig
+
 # ---------------------- FUNÇÕES DE INDICADORES ----------------------
 
 def pine_linreg(series, length):
@@ -30,6 +79,15 @@ def calcular_indicadores(df, length=20, momentum_threshold=0.07):
     df['rompe_resistencia'] = df['Close'] > df['High20']
     df['suporte'] = df['Low'].rolling(length).min()
     return df
+
+def detectar_vcp(df):
+    if 'Volume' not in df.columns or len(df) < 60:
+        return False
+    closes = df['Close']
+    std_20 = closes.rolling(20).std()
+    contracoes = (std_20 < std_20.shift(1)) & (std_20.shift(1) < std_20.shift(2))
+    volume_decrescente = (df['Volume'].rolling(20).mean() < df['Volume'].rolling(20).mean().shift(5))
+    return contracoes.iloc[-1] and volume_decrescente.iloc[-1]
 
 def calcular_pivot_points(df):
     high = df['High'].iloc[-2]
@@ -67,7 +125,7 @@ def avaliar_risco(df):
     if df['momentum_up'].iloc[-1]: base_risk -= 1
     return int(min(max(round(base_risk), 1), 10))
 
-def gerar_comentario(df, risco, tendencia):
+def gerar_comentario(df, risco, tendencia, vcp):
     comentario = f"Tendência: {tendencia}. "
     if df['momentum_up'].iloc[-1] and df['rompe_resistencia'].iloc[-1]:
         comentario += "Sinal de força técnica detectado (momentum + rompimento). "
@@ -77,6 +135,8 @@ def gerar_comentario(df, risco, tendencia):
         comentario += "Rompimento de resistência detectado. "
     else:
         comentario += "Sem sinais fortes de entrada. "
+    if vcp:
+        comentario += " | Padrão VCP detectado 🔍"
 
     PP, suportes, resistencias = calcular_pivot_points(df)
     preco_atual = df['Close'].iloc[-1]
@@ -87,14 +147,13 @@ def gerar_comentario(df, risco, tendencia):
 
 # ---------------------- INTERFACE STREAMLIT ----------------------
 
-st.set_page_config(layout="wide")
+
 st.title("🚀 Resultados com IA e Filtros Técnicos")
 
-length = st.sidebar.slider("🕒 Período da média e suporte", 10, 40, 20)
+# --- SIDEBAR CONFIG ---
 threshold = st.sidebar.slider("⚡ Limite de momentum", 0.01, 0.2, 0.07)
 dias_breakout = st.sidebar.slider("📈 Breakout da máxima dos últimos X dias", 10, 60, 20)
 lookback = st.sidebar.slider("📊 Candles recentes analisados", 3, 10, 5)
-
 sinal = st.sidebar.selectbox("🎯 Filtrar por sinal", ["Todos", "Ambos", "Momentum", "Breakout"])
 performance = st.sidebar.selectbox("📊 Filtro de desempenho", [
     "Quarter Up", "Quarter +10%", "Quarter +20%", "Quarter +30%", "Quarter +50%",
@@ -102,46 +161,9 @@ performance = st.sidebar.selectbox("📊 Filtro de desempenho", [
     "Year Up", "Year +10%", "Year +20%", "Year +30%", "Year +50%", "Year +100%",
     "Year +200%", "Year +300%", "Year +500%"
 ], index=15)
-
+mostrar_vcp = st.sidebar.checkbox("🔎 Mostrar apenas ativos com padrão VCP", value=False, key="checkbox_vcp")
 executar = st.sidebar.button("🔍 Iniciar análise")
-ticker_manual = st.sidebar.text_input("📌 Ver gráfico de um ticker específico (ex: AAPL)").upper()
-
-def plot_ativo(df, ticker, nome_empresa):
-    df['DataStr'] = df.index.strftime("%d %b")
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df['DataStr'], open=df['Open'], high=df['High'],
-                                 low=df['Low'], close=df['Close'], name='Candlestick'))
-    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['SMA50'], mode='lines',
-                             line=dict(color='white'), name='Média 50 dias'))
-    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['High20'], line=dict(color='orange', dash='dot'),
-                             name='Resistência'))
-    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['suporte'], line=dict(color='blue', dash='dot'),
-                             name='Suporte'))
-    fig.add_trace(go.Bar(x=df['DataStr'], y=df['momentum'],
-                         marker_color=['aqua' if m > 0 else 'red' for m in df['momentum']],
-                         name='Momentum'))
-    df_up = df[df['momentum_up']]
-    df_rompe = df[df['rompe_resistencia']]
-    fig.add_trace(go.Scatter(x=df_up['DataStr'], y=df_up['High'] * 1.02,
-                             mode='markers', marker=dict(symbol='triangle-up', color='violet', size=10),
-                             name='Momentum Up'))
-    fig.add_trace(go.Scatter(x=df_rompe['DataStr'], y=df_rompe['High'] * 1.05,
-                             mode='markers', marker=dict(symbol='diamond', color='lime', size=10),
-                             name='Rompimento'))
-
-    PP, suportes, resistencias = calcular_pivot_points(df)
-    for s in suportes:
-        fig.add_shape(type='rect', x0=df['DataStr'].iloc[0], x1=df['DataStr'].iloc[-1],
-                      y0=s * 0.997, y1=s * 1.003, fillcolor='rgba(0,0,255,0.1)', layer='below', line_width=0)
-    for r in resistencias:
-        fig.add_shape(type='rect', x0=df['DataStr'].iloc[0], x1=df['DataStr'].iloc[-1],
-                      y0=r * 0.997, y1=r * 1.003, fillcolor='rgba(255,0,0,0.1)', layer='below', line_width=0)
-
-    fig.update_layout(template='plotly_dark', height=600, hovermode='x unified',
-                      xaxis_rangeslider_visible=False,
-                      xaxis=dict(type='category', tickangle=-45),
-                      yaxis=dict(side='right', title='Preço'))
-    return fig
+ticker_manual = st.sidebar.text_input("📌 Ver gráfico de um ticker específico (ex: AAPL)", key="textinput_ticker_manual").upper()
 
 if executar:
     st.session_state.recomendacoes = []
@@ -154,55 +176,44 @@ if executar:
     total_ambos = 0
 
     for ticker in tickers:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        df = calcular_indicadores(df, dias_breakout, threshold)
+        try:
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            df = calcular_indicadores(df, dias_breakout, threshold)
 
-        momentum_cond = df['momentum_up'].iloc[-lookback:].any()
-        breakout_cond = df['rompe_resistencia'].iloc[-lookback:].any()
-        ambos_cond = momentum_cond and breakout_cond
+            momentum_cond = df['momentum_up'].iloc[-lookback:].any()
+            breakout_cond = df['rompe_resistencia'].iloc[-lookback:].any()
+            ambos_cond = momentum_cond and breakout_cond
 
-        if momentum_cond: total_momentum += 1
-        if breakout_cond: total_breakout += 1
-        if ambos_cond: total_ambos += 1
+            vcp_detectado = detectar_vcp(df)
+            if mostrar_vcp and not vcp_detectado:
+                continue
 
-        match sinal:
-            case "Momentum": cond = momentum_cond
-            case "Breakout": cond = breakout_cond
-            case "Ambos": cond = ambos_cond
-            case _: cond = True
+            match sinal:
+                case "Momentum": cond = momentum_cond
+                case "Breakout": cond = breakout_cond
+                case "Ambos": cond = ambos_cond
+                case _: cond = True
 
-        if not cond: continue
+            if not cond: continue
 
-        nome = yf.Ticker(ticker).info.get("shortName", ticker)
-        risco = avaliar_risco(df)
-        tendencia = classificar_tendencia(df['Close'].tail(20))
-        comentario = gerar_comentario(df, risco, tendencia)
+            nome = yf.Ticker(ticker).info.get("shortName", ticker)
+            risco = avaliar_risco(df)
+            tendencia = classificar_tendencia(df['Close'].tail(20))
+            comentario = gerar_comentario(df, risco, tendencia, vcp_detectado)
 
-        st.subheader(f"{ticker} - {nome}")
-        st.plotly_chart(plot_ativo(df, ticker, nome), use_container_width=True)
-        st.markdown(f"**🧠 Análise IA:** {comentario}")
-        st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`")
+            st.subheader(f"{ticker} - {nome}")
+            st.plotly_chart(plot_ativo(df, ticker, nome, vcp_detectado), use_container_width=True)
+            st.markdown(f"**🧠 Análise IA:** {comentario}")
+            st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`")
 
-        st.session_state.recomendacoes.append({
-            "Ticker": ticker, "Empresa": nome, "Risco": risco,
-            "Tendência": tendencia, "Comentário": comentario
-        })
-
-    st.subheader("📊 Análise Resumida dos Ativos")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total analisados", len(tickers))
-    col2.metric("Com Momentum", total_momentum)
-    col3.metric("Com Breakout", total_breakout)
-    col4.metric("Com Ambos", total_ambos)
-
-    df_totais = pd.DataFrame({
-        'Sinal': ['Momentum', 'Breakout', 'Ambos'],
-        'Quantidade': [total_momentum, total_breakout, total_ambos]
-    })
-    fig_bar = px.bar(df_totais, x='Sinal', y='Quantidade', title='Distribuição dos Sinais Detectados')
-    st.plotly_chart(fig_bar, use_container_width=True)
+            st.session_state.recomendacoes.append({
+                "Ticker": ticker, "Empresa": nome, "Risco": risco,
+                "Tendência": tendencia, "Comentário": comentario
+            })
+        except Exception as e:
+            st.warning(f"Erro com {ticker}: {e}")
 
     if st.session_state.recomendacoes:
         st.subheader("📋 Tabela Final de Recomendações")
@@ -216,11 +227,12 @@ if ticker_manual:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
     df = calcular_indicadores(df, dias_breakout, threshold)
+    vcp_detectado = detectar_vcp(df)
     nome = yf.Ticker(ticker_manual).info.get("shortName", ticker_manual)
     risco = avaliar_risco(df)
     tendencia = classificar_tendencia(df['Close'].tail(20))
-    comentario = gerar_comentario(df, risco, tendencia)
+    comentario = gerar_comentario(df, risco, tendencia, vcp_detectado)
     st.subheader(f"{ticker_manual} - {nome}")
-    st.plotly_chart(plot_ativo(df, ticker_manual, nome), use_container_width=True)
+    st.plotly_chart(plot_ativo(df, ticker_manual, nome, vcp_detectado), use_container_width=True)
     st.markdown(f"**🧠 Análise IA:** {comentario}")
     st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`")
