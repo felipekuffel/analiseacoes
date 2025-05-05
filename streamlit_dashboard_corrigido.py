@@ -81,13 +81,69 @@ def calcular_indicadores(df, length=20, momentum_threshold=0.07):
     return df
 
 def detectar_vcp(df):
-    if 'Volume' not in df.columns or len(df) < 60:
+    if 'Volume' not in df.columns or len(df) < 40:
         return False
+
     closes = df['Close']
-    std_20 = closes.rolling(20).std()
-    contracoes = (std_20 < std_20.shift(1)) & (std_20.shift(1) < std_20.shift(2))
-    volume_decrescente = (df['Volume'].rolling(20).mean() < df['Volume'].rolling(20).mean().shift(5))
-    return contracoes.iloc[-1] and volume_decrescente.iloc[-1]
+    highs = df['High']
+    lows = df['Low']
+    volumes = df['Volume']
+    sma50 = closes.rolling(50).mean()
+
+    # 1. Dois pivôs descendentes
+    max1 = highs[-40:-20].max()
+    max2 = highs[-20:].max()
+    if pd.isna(max1) or pd.isna(max2) or not (max1 > max2):
+        return False
+
+    min1 = lows[-40:-20].min()
+    min2 = lows[-20:].min()
+    if pd.isna(min1) or pd.isna(min2) or not (min1 < min2):
+        return False
+
+    # 2. Volume médio geral caindo
+    vol_ant = volumes[-40:-20].mean()
+    vol_rec = volumes[-20:].mean()
+    if pd.isna(vol_ant) or pd.isna(vol_rec) or not (vol_ant > vol_rec):
+        return False
+
+    # 3. Range (amplitude) caindo
+    range_ant = (highs[-40:-20] - lows[-40:-20]).mean()
+    range_rec = (highs[-20:] - lows[-20:]).mean()
+    if pd.isna(range_ant) or pd.isna(range_rec) or not (range_ant > range_rec):
+        return False
+
+    # 4. Preço ao menos na média de 50
+    if pd.isna(sma50.iloc[-1]) or closes.iloc[-1] < sma50.iloc[-1] * 0.97:
+        return False
+
+    return True
+
+    min1 = lows[-60:-40].min()
+    min2 = lows[-40:-20].min()
+    min3 = lows[-20:].min()
+    if not (min1 < min2 < min3):
+        return False
+
+    # 2. Volume médio caindo
+    vol1 = volumes[-60:-40].mean()
+    vol2 = volumes[-40:-20].mean()
+    vol3 = volumes[-20:].mean()
+    if not (vol1 > vol2 > vol3):
+        return False
+
+    # 3. Redução do range (amplitude)
+    range1 = (highs[-60:-40] - lows[-60:-40]).mean()
+    range2 = (highs[-40:-20] - lows[-40:-20]).mean()
+    range3 = (highs[-20:] - lows[-20:]).mean()
+    if not (range1 > range2 > range3):
+        return False
+
+    # 4. Preço acima da média de 50 períodos
+    if closes.iloc[-1] < sma50.iloc[-1]:
+        return False
+
+    return True
 
 def calcular_pivot_points(df):
     high = df['High'].iloc[-2]
