@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -7,30 +6,68 @@ from finvizfinance.screener.overview import Overview
 import plotly.graph_objects as go
 import plotly.express as px
 import time
-
+from plotly.subplots import make_subplots
 st.set_page_config(layout="wide")
+
+def get_nome_empresa(ticker):
+    try:
+        return yf.Ticker(ticker).fast_info.get("shortName", ticker)
+    except Exception:
+        return ticker
+
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
+    df['pct_change'] = df['Close'].pct_change() * 100
     df['DataStr'] = df.index.strftime("%d %b")
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df['DataStr'], open=df['Open'], high=df['High'],
-                                 low=df['Low'], close=df['Close'], name='Candlestick'))
+    df["previousClose"] = df["Close"].shift(1)
+    df["color"] = np.where(df["Close"] > df["previousClose"], "#2736e9", "#de32ae")
+    df["Percentage"] = df["Volume"] * 100 / df["Volume"].sum()
+
+    fig = make_subplots(
+        rows=3, cols=1,
+        row_heights=[0.6, 0.2, 0.2],
+        specs=[[{"type": "xy"}], [{"type": "xy"}], [{"type": "xy"}]],
+        vertical_spacing=0.02,
+        shared_xaxes=True
+    )
+
+    df['pct_change'] = df['Close'].pct_change() * 100
+    hovertext = df.apply(lambda row: f"{row['DataStr']}<br>Open: {row['Open']:.2f}<br>High: {row['High']:.2f}<br>Low: {row['Low']:.2f}<br>Close: {row['Close']:.2f}<br>Variação: {row['pct_change']:.2f}%" if pd.notna(row['pct_change']) else row['DataStr'], axis=1)
+
+    for i, row in df.iterrows():
+        fig.add_trace(
+            go.Ohlc(
+                x=[row['DataStr']],
+                open=[row['Open']],
+                high=[row['High']],
+                low=[row['Low']],
+                close=[row['Close']],
+                increasing_line_color="#2736e9",
+                decreasing_line_color="#de32ae",
+                line_width=3,
+                showlegend=False,
+                text=[hovertext.loc[i]],
+                hoverinfo='text'
+            ), row=1, col=1
+        )
+
     fig.add_trace(go.Scatter(x=df['DataStr'], y=df['SMA50'], mode='lines',
-                             line=dict(color='white'), name='Média 50 dias'))
-    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['High20'], line=dict(color='orange', dash='dot'),
-                             name='Resistência'))
-    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['suporte'], line=dict(color='blue', dash='dot'),
-                             name='Suporte'))
-    fig.add_trace(go.Bar(x=df['DataStr'], y=df['momentum'],
-                         marker_color=['aqua' if m > 0 else 'red' for m in df['momentum']],
-                         name='Momentum'))
+                             line=dict(color='grey'), name='Média 50 dias'), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['High20'], line=dict(color='#636363', dash='dot'),
+                             name='Resistência'), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df['DataStr'], y=df['suporte'], line=dict(color='#636363', dash='dot'),
+                             name='Suporte'), row=1, col=1)
+
     df_up = df[df['momentum_up']]
     df_rompe = df[df['rompe_resistencia']]
     fig.add_trace(go.Scatter(x=df_up['DataStr'], y=df_up['High'] * 1.02,
                              mode='markers', marker=dict(symbol='triangle-up', color='violet', size=10),
-                             name='Momentum Up'))
+                             name='Momentum Up'), row=1, col=1)
+
     fig.add_trace(go.Scatter(x=df_rompe['DataStr'], y=df_rompe['High'] * 1.05,
                              mode='markers', marker=dict(symbol='diamond', color='lime', size=10),
-                             name='Rompimento'))
+                             name='Rompimento'), row=1, col=1)
 
     if vcp_detectado:
         last_index = df['DataStr'].iloc[-1]
@@ -40,22 +77,60 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
             y=[last_price * 1.08],
             mode='markers',
             marker=dict(symbol='star-diamond', color='magenta', size=14),
-            name='Padrão VCP'
-        ))
+            name='Padrão VCP',
+            text=hovertext,
+            hovertext=hovertext,
+            hoverinfo='x+text'
+        ), row=1, col=1)
 
-    PP, suportes, resistencias = calcular_pivot_points(df)
-    for s in suportes:
-        fig.add_shape(type='rect', x0=df['DataStr'].iloc[0], x1=df['DataStr'].iloc[-1],
-                      y0=s * 0.997, y1=s * 1.003, fillcolor='rgba(0,0,255,0.1)', layer='below', line_width=0)
-    for r in resistencias:
-        fig.add_shape(type='rect', x0=df['DataStr'].iloc[0], x1=df['DataStr'].iloc[-1],
-                      y0=r * 0.997, y1=r * 1.003, fillcolor='rgba(255,0,0,0.1)', layer='below', line_width=0)
+    fig.add_trace(go.Bar(
+        x=df['DataStr'],
+        y=df['Volume'],
+        text=df['Percentage'],
+        marker_line_color=df['color'],
+        marker_color=df['color'],
+        name="Volume",
+        texttemplate="%{text:.2f}%",
+        hoverinfo="x+y",
+        textfont=dict(color="white"),
+        showlegend=True,
+        legendgroup='Volume'
+    ), row=2, col=1)
 
-    fig.update_layout(template='plotly_dark', height=600, hovermode='x unified',
-                      xaxis_rangeslider_visible=False,
-                      xaxis=dict(type='category', tickangle=-45),
-                      yaxis=dict(side='right', title='Preço'))
+    # Momentum com transparência de 20%
+    fig.add_trace(go.Bar(
+        x=df['DataStr'],
+        y=df['momentum'],
+        marker_color=['rgba(14, 22, 84, 0.79)' if m > 0 else 'rgba(84, 14, 77, 0.79)' for m in df['momentum']],
+        name='Momentum',
+        showlegend=True,
+        legendgroup='Momentum'
+    ), row=3, col=1)
+
+    fig.update_xaxes(showticklabels=False, row=2, col=1)
+    fig.update_xaxes(showticklabels=False, row=3, col=1)
+
+    pct_text = f" ({df['pct_change'].iloc[-1]:+.2f}%)"
+    fig.update_layout(
+        title=f"{ticker} - {nome_empresa}{pct_text}",
+        template='plotly_dark',
+        height=900,
+        hovermode='x unified',
+        xaxis_rangeslider_visible=False,
+        yaxis=dict(title='', side='right', type='log'),
+        yaxis2=dict(side='right'),
+        yaxis3=dict(side='right'),
+        legend=dict(x=1.05, y=1, traceorder='reversed', font_size=12),
+        bargap=0.1
+    )
+
     return fig
+
+
+
+
+
+
 
 # ---------------------- FUNÇÕES DE INDICADORES ----------------------
 
