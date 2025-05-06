@@ -8,8 +8,6 @@ import plotly.express as px
 import time
 from plotly.subplots import make_subplots
 
-
-
 st.set_page_config(layout="wide")
 
 def get_nome_empresa(ticker):
@@ -18,10 +16,13 @@ def get_nome_empresa(ticker):
     except Exception:
         return ticker
 
+
+
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
-    df = df.tail(120).copy()
+    df = df.tail(150).copy()
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index)
+    df['index_str'] = df.index.strftime('%Y-%m-%d')
 
     df['pct_change'] = df['Close'].pct_change() * 100
     df['DataStr'] = df.index.strftime("%d %b")
@@ -39,50 +40,42 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
 
     hovertext = df.apply(lambda row: f"{row['DataStr']}<br>Open: {row['Open']:.2f}<br>High: {row['High']:.2f}<br>Low: {row['Low']:.2f}<br>Close: {row['Close']:.2f}<br>Variação: {row['pct_change']:.2f}%" if pd.notna(row['pct_change']) else row['DataStr'], axis=1)
 
-    # Médias móveis
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], mode='lines', line=dict(color='rgba(0, 153, 255, 0.42)', width=1), name='SMA50'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], mode='lines', line=dict(color='rgba(0,255,0,0.4)', width=1), name='EMA20'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA150'], mode='lines', line=dict(color='rgba(255,165,0,0.4)', width=1), name='SMA150'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], mode='lines', line=dict(color='rgba(253, 76, 76, 0.4)', width=1), name='SMA200'), row=1, col=1)
+   # Médias móveis (primeiro, para ficarem atrás)
+    fig.add_trace(go.Scatter(x=df['index_str'], y=df['SMA50'], mode='lines',
+                            line=dict(color='rgba(0, 153, 255, 0.42)', width=1), name='SMA50'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['index_str'], y=df['EMA20'], mode='lines',
+                            line=dict(color='rgba(0,255,0,0.4)', width=1), name='EMA20'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['index_str'], y=df['SMA150'], mode='lines',
+                            line=dict(color='rgba(255,165,0,0.4)', width=1), name='SMA150'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['index_str'], y=df['SMA200'], mode='lines',
+                            line=dict(color='rgba(253, 76, 76, 0.4)', width=1), name='SMA200'), row=1, col=1)
 
-    fig.add_trace(go.Ohlc(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+    # OHLC (candles) por último para ficar por cima
+    fig.add_trace(go.Ohlc(
+        x=df['index_str'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
         increasing_line_color="#2736e9", decreasing_line_color="#de32ae", line_width=3,
         showlegend=False, text=hovertext, hoverinfo='text'), row=1, col=1)
 
+    
+
     df_up = df[df['momentum_up']]
     df_rompe = df[df['rompe_resistencia']]
-    fig.add_trace(go.Scatter(x=df_up.index, y=df_up['High'] * 1.02, mode='markers', marker=dict(symbol='diamond', color='violet', size=6), name='Momentum Up'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_rompe.index, y=df_rompe['High'] * 1.02, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=6), name='Rompimento'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_up['index_str'], y=df_up['High'] * 1.03, mode='markers', marker=dict(symbol='diamond', color='violet', size=6), name='Momentum Up'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_rompe['index_str'], y=df_rompe['High'] * 1.03, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=6), name='Rompimento'), row=1, col=1)
 
     if vcp_detectado:
-        last_index = df.index[-1]
+        last_index = df['index_str'].iloc[-1]
         last_price = df['Close'].iloc[-1]
         fig.add_trace(go.Scatter(x=[last_index], y=[last_price * 1.06], mode='markers', marker=dict(symbol='star-diamond', color='magenta', size=8), name='Padrão VCP', text=hovertext, hoverinfo='x+text'), row=1, col=1)
 
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], text=df['Percentage'], marker_line_color=df['color'], marker_color=df['color'], name="Volume", texttemplate="%{text:.2f}%", hoverinfo="x+y", textfont=dict(color="white")), row=2, col=1)
-
-    fig.add_trace(go.Bar(
-        x=df.index,
-        y=df['momentum'],
-        marker_color=['rgba(14, 22, 84, 0.79)' if m > 0 else 'rgba(84, 14, 77, 0.79)' for m in df['momentum']],
-        name='Momentum',
-        showlegend=True,
-        legendgroup='Momentum'
-    ), row=3, col=1)
-
+    fig.add_trace(go.Bar(x=df['index_str'], y=df['Volume'], text=df['Percentage'], marker_line_color=df['color'], marker_color=df['color'], name="Volume", texttemplate="%{text:.2f}%", hoverinfo="x+y", textfont=dict(color="white")), row=2, col=1)
+    fig.add_trace(go.Bar(x=df['index_str'], y=df['momentum'], marker=dict(color=['rgba(23, 36, 131, 0.5)' if m > 0 else 'rgba(84, 14, 77, 0.50)' for m in df['momentum']], line=dict(width=0)), name='Momentum'), row=3, col=1)
     fig.update_xaxes(showticklabels=False, row=2, col=1)
-    fig.update_xaxes(showticklabels=True, row=3, col=1)
-
-    fig.update_xaxes(
-        tickmode='array',
-        tickvals=df.index[::len(df)//6],
-        ticktext=df['DataStr'][::len(df)//6],
-        row=3, col=1
-    )
+    fig.update_xaxes(showticklabels=False, row=3, col=1)
 
     pct_text = f" ({df['pct_change'].iloc[-1]:+.2f}%)"
+    fig.add_hline(y=df['Close'].iloc[-1], line=dict(color='rgba(128,128,128,0.5)', width=1, dash='dot'), row=1, col=1)
     pct_price = df['Close'].iloc[-1]
-    fig.add_hline(y=pct_price, line=dict(color='rgba(128,128,128,0.5)', width=1, dash='dot'), row=1, col=1)
 
     fig.update_layout(
         xaxis=dict(type='category'),
@@ -100,13 +93,14 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
         bargap=0.1
     )
 
-    # FLAT BASE
+    # --- FLAT BASE (conforme já estava implementado) ---
     zonas_flat = []
     i = 0
     while i < len(df) - 14:
         max_candles = 90
         min_candles = 14
         j = i + min_candles
+
         base_salva = None
 
         while j < len(df) and (j - i) <= max_candles:
@@ -119,8 +113,8 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
                 break
 
             if (j - i) >= min_candles:
-                inicio = sub_df.index[0]
-                fim = sub_df.index[-1]
+                inicio = sub_df['index_str'].iloc[0]
+                fim = sub_df['index_str'].iloc[-1]
                 resistencia = round(high, 2)
                 suporte = round(low, 2)
                 duracao = j - i
@@ -140,10 +134,11 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
         fig.add_trace(go.Scatter(x=[inicio, fim], y=[suporte, suporte], mode="lines", line=dict(color="green", width=2, dash="dot"), hoverinfo="skip", showlegend=False), row=1, col=1)
         variacao_pct = ((resistencia - suporte) / resistencia) * 100
         fig.add_annotation(x=inicio, y=resistencia, text=f"{resistencia:.2f} | {variacao_pct:.1f}% | {duracao} d ", showarrow=False, font=dict(color="green", size=10), bgcolor="rgba(255, 255, 255, 0)", yanchor="bottom", xanchor="left")
-        fig.add_annotation(x=inicio, y=suporte, text=f"{suporte:.2f}", showarrow=False, font=dict(color="green", size=10), bgcolor="rgba(255, 255, 255, 0)", yanchor="top", xanchor="left")
+        # Anotação inferior: suporte
+        fig.add_annotation(x=inicio, y=suporte,text=f"{suporte:.2f}",showarrow=False,font=dict(color="green", size=10),bgcolor="rgba(255, 255, 255, 0)",yanchor="top", xanchor="left")
+
 
     return fig
-
 
 
 
@@ -390,7 +385,6 @@ if executar:
             st.warning(f"Erro com {ticker}: {e}")
 
         progress.progress((i + 1) / len(tickers))
-        time.sleep(0.2) 
 
     status_text.empty()
     progress.empty()
