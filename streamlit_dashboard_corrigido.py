@@ -61,7 +61,7 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     df_up = df[df['momentum_up']]
     df_rompe = df[df['rompe_resistencia']]
     fig.add_trace(go.Scatter(x=df_up['index_str'], y=df_up['High'] * 1.03, mode='markers', marker=dict(symbol='diamond', color='violet', size=6), name='Momentum Up'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_rompe['index_str'], y=df_rompe['High'] * 1.3, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=6), name='Rompimento'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_rompe['index_str'], y=df_rompe['High'] * 1.03, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=6), name='Rompimento'), row=1, col=1)
 
     if vcp_detectado:
         last_index = df['index_str'].iloc[-1]
