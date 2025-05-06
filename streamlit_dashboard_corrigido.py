@@ -8,6 +8,8 @@ import plotly.express as px
 import time
 from plotly.subplots import make_subplots
 
+
+
 st.set_page_config(layout="wide")
 
 def get_nome_empresa(ticker):
@@ -15,8 +17,6 @@ def get_nome_empresa(ticker):
         return yf.Ticker(ticker).fast_info.get("shortName", ticker)
     except Exception:
         return ticker
-
-
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     df = df.tail(120).copy()
@@ -390,6 +390,7 @@ if executar:
             st.warning(f"Erro com {ticker}: {e}")
 
         progress.progress((i + 1) / len(tickers))
+        time.sleep(0.2) 
 
     status_text.empty()
     progress.empty()
