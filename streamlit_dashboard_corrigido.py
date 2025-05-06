@@ -299,7 +299,7 @@ def gerar_comentario(df, risco, tendencia, vcp):
 # ---------------------- INTERFACE STREAMLIT ----------------------
 
 
-st.title("🚀 Resultados com IA e Filtros Técnicos")
+st.title("🚀🔍")
 
 # --- SIDEBAR CONFIG ---
 threshold = st.sidebar.slider("⚡ Limite de momentum", 0.01, 0.2, 0.07)
