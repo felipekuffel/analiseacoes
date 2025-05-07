@@ -16,13 +16,14 @@ def get_nome_empresa(ticker):
     except Exception:
         return ticker
 
-# --- Função de earnings detalhado ---
 def get_earnings_info_detalhado(ticker):
     try:
         ticker_obj = yf.Ticker(ticker)
-        if ticker_obj.calendar is not None and not ticker_obj.calendar.empty:
-            if 'Earnings Date' in ticker_obj.calendar.index and pd.notna(ticker_obj.calendar.loc['Earnings Date'][0]):
-                earnings_date = ticker_obj.calendar.loc['Earnings Date'][0]
+        calendar = ticker_obj.calendar
+
+        if isinstance(calendar, pd.DataFrame):
+            if 'Earnings Date' in calendar.index and pd.notna(calendar.loc['Earnings Date'][0]):
+                earnings_date = calendar.loc['Earnings Date'][0]
                 if isinstance(earnings_date, pd.Timestamp):
                     now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
                     delta = (earnings_date - now).days
@@ -31,9 +32,11 @@ def get_earnings_info_detalhado(ticker):
                         return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
                     else:
                         return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
+
         return "Indisponível", None, None
     except Exception as e:
         return f"Erro: {e}", None, None
+
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     df = df.tail(150).copy()
