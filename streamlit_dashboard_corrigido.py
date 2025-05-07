@@ -15,6 +15,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.hazmat.primitives import serialization
+st.set_page_config(layout="wide")
 
 # Esconder menu e rodapé do Streamlit
 hide_streamlit_style = """
