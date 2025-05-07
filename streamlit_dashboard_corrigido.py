@@ -21,9 +21,9 @@ def get_earnings_info_detalhado(ticker):
     try:
         ticker_obj = yf.Ticker(ticker)
         if ticker_obj.calendar is not None and not ticker_obj.calendar.empty:
-            if 'Earnings Date' in ticker_obj.calendar.index:
+            if 'Earnings Date' in ticker_obj.calendar.index and pd.notna(ticker_obj.calendar.loc['Earnings Date'][0]):
                 earnings_date = ticker_obj.calendar.loc['Earnings Date'][0]
-                if isinstance(earnings_date, pd.Timestamp) and not pd.isna(earnings_date):
+                if isinstance(earnings_date, pd.Timestamp):
                     now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
                     delta = (earnings_date - now).days
                     data_str = earnings_date.strftime('%d %b %Y')
@@ -33,8 +33,7 @@ def get_earnings_info_detalhado(ticker):
                         return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
         return "Indisponível", None, None
     except Exception as e:
-        return"Erro: {str(e)}", None, None
-
+        return f"Erro: {e}", None, None
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     df = df.tail(150).copy()
