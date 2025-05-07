@@ -16,6 +16,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.hazmat.primitives import serialization
 from streamlit_autorefresh import st_autorefresh
+import os
 
 st.set_page_config(layout="wide")
 # Mantém o app ativo mesmo sem interação (a cada 8 minutos)
