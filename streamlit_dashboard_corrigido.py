@@ -374,7 +374,36 @@ if executar:
                 st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker}")
 
             st.markdown(f"**🧠 Análise IA:** {comentario}")
-            st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`")
+                        # Obter dados de resultados
+            try:
+                ticker_obj = yf.Ticker(ticker_manual if 'ticker_manual' in locals() and ticker_manual else ticker)
+                calendar = ticker_obj.calendar
+                earnings_dates = ticker_obj.earnings_dates
+
+                data_hoje = pd.Timestamp.today()
+
+                # Próximo resultado
+                try:
+                    data_proximo_resultado = calendar.loc['Earnings Date']
+                    dias_ate_proximo = (data_proximo_resultado - data_hoje).days
+                    texto_proximo = f" | 📅 Próx. resultado: {data_proximo_resultado.strftime('%d-%m-%Y')} (em {dias_ate_proximo} dias)"
+                except Exception:
+                    texto_proximo = ""
+
+                # Último resultado
+                try:
+                    data_ultimo_resultado = earnings_dates.index[0]
+                    dias_desde_ultimo = (data_hoje - data_ultimo_resultado).days
+                    texto_ultimo = f" | 🕓 Último resultado: {data_ultimo_resultado.strftime('%d-%m-%Y')} (há {dias_desde_ultimo} dias)"
+                except Exception:
+                    texto_ultimo = ""
+
+            except Exception:
+                texto_proximo = texto_ultimo = ""
+
+            # Exibir com os outros dados
+            st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`{texto_proximo}{texto_ultimo}")
+
 
             st.session_state.recomendacoes.append({
                 "Ticker": ticker, "Empresa": nome, "Risco": risco,
@@ -413,4 +442,29 @@ if ticker_manual:
         fig = plot_ativo(df, ticker_manual, nome, vcp_detectado)
         st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker_manual}_manual")
     st.markdown(f"**🧠 Análise IA:** {comentario}")
-    st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`")
+    # Obter dados de resultados
+    ticker_obj = yf.Ticker(ticker_manual if ticker_manual else ticker)
+    calendar = ticker_obj.calendar
+    earnings_dates = ticker_obj.earnings_dates
+
+    data_hoje = pd.Timestamp.today()
+
+    # Próximo resultado
+    try:
+        data_proximo_resultado = calendar.loc['Earnings Date'][0]
+        dias_ate_proximo = (data_proximo_resultado - data_hoje).days
+        texto_proximo = f" | 📅 Próx. resultado: {data_proximo_resultado.strftime('%d-%m-%Y')} (em {dias_ate_proximo} dias)"
+    except Exception:
+        texto_proximo = ""
+
+    # Último resultado
+    try:
+        data_ultimo_resultado = earnings_dates.index[0]
+        dias_desde_ultimo = (data_hoje - data_ultimo_resultado).days
+        texto_ultimo = f" | 🕓 Último resultado: {data_ultimo_resultado.strftime('%d-%m-%Y')} (há {dias_desde_ultimo} dias)"
+    except Exception:
+        texto_ultimo = ""
+
+    # Exibir com os outros dados
+    st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`{texto_proximo}{texto_ultimo}")
+
