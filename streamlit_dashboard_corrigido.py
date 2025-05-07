@@ -7,14 +7,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 import time
 from plotly.subplots import make_subplots
+import datetime
 
 st.set_page_config(layout="wide")
-
-def get_nome_empresa(ticker):
-    try:
-        return yf.Ticker(ticker).fast_info.get("shortName", ticker)
-    except Exception:
-        return ticker
 
 # --- Função de earnings detalhado ---
 def get_earnings_info_detalhado(ticker):
@@ -22,17 +17,15 @@ def get_earnings_info_detalhado(ticker):
         ticker_obj = yf.Ticker(ticker)
         calendar = ticker_obj.calendar
 
-        # Trata caso 'Earnings Date' esteja como coluna (ex: AAPL)
-        if isinstance(calendar, pd.DataFrame) and not calendar.empty:
-            if 'Earnings Date' in calendar.columns:
-                earnings_date = calendar['Earnings Date'].values[0]
-            elif 'Earnings Date' in calendar.index:
-                earnings_date = calendar.loc['Earnings Date'][0]
-            else:
-                return "Indisponível", None, None
+        if isinstance(calendar, dict) or isinstance(calendar, pd.Series):
+            earnings = calendar.get("Earnings Date", None)
 
-            if isinstance(earnings_date, pd.Timestamp) and pd.notna(earnings_date):
-                now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
+            # Se for uma lista de datas, pegamos a primeira futura
+            if isinstance(earnings, list) and earnings:
+                earnings = earnings[0]
+            if isinstance(earnings, (pd.Timestamp, datetime.datetime, datetime.date)):
+                earnings_date = pd.to_datetime(earnings).tz_localize("America/New_York") if pd.to_datetime(earnings).tzinfo is None else pd.to_datetime(earnings)
+                now = pd.Timestamp.now(tz="America/New_York")
                 delta = (earnings_date - now).days
                 data_str = earnings_date.strftime('%d %b %Y')
                 if delta >= 0:
@@ -43,7 +36,6 @@ def get_earnings_info_detalhado(ticker):
         return "Indisponível", None, None
     except Exception as e:
         return f"Erro: {e}", None, None
-
 
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
@@ -291,19 +283,58 @@ def classificar_tendencia(close):
     else:
         return "Lateral"
 
+
+# --- Nova função de risco aprimorada ---
 def avaliar_risco(df):
     preco_atual = df['Close'].iloc[-1]
-    sup10 = df['Low'].rolling(10).min().iloc[-1]
-    res10 = df['High'].rolling(10).max().iloc[-1]
-    sup20 = df['Low'].rolling(20).min().iloc[-1]
-    res20 = df['High'].rolling(20).max().iloc[-1]
-    dist_sup = min(abs(preco_atual - sup10), abs(preco_atual - sup20))
-    dist_res = min(abs(preco_atual - res10), abs(preco_atual - res20))
-    base_risk = (dist_res / preco_atual) * 10 if dist_sup < dist_res else 8 + (dist_sup / preco_atual) * 2
-    if df['rompe_resistencia'].iloc[-1]: base_risk += 1
-    if df['momentum_up'].iloc[-1]: base_risk -= 1
-    return int(min(max(round(base_risk), 1), 10))
+    suporte = df['Low'].rolling(20).min().iloc[-1]
+    resistencia = df['High'].rolling(20).max().iloc[-1]
+    risco = 5  # ponto base
 
+    # ATR (volatilidade)
+    df['TR'] = np.maximum(df['High'] - df['Low'], np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
+    atr = df['TR'].rolling(14).mean().iloc[-1]
+    if atr / preco_atual > 0.05:
+        risco += 1  # ativo volátil
+    else:
+        risco -= 1  # ativo estável
+
+    # Distância até suporte
+    if (preco_atual - suporte) / preco_atual > 0.05:
+        risco += 1
+
+    # Proximidade da resistência
+    if (resistencia - preco_atual) / preco_atual < 0.03:
+        risco += 1
+
+    # Preço abaixo da média de 200
+    if preco_atual < df['SMA200'].iloc[-1]:
+        risco += 1
+
+    # Quedas consecutivas nos últimos 30 dias
+    closes = df['Close'].tail(30).reset_index(drop=True)
+    quedas = sum(closes.diff() < 0)
+    if quedas >= 3:
+        risco += 1
+
+    # Queda com volume alto nos últimos 30 dias
+    recent_df = df.tail(30)
+    media_volume = recent_df['Volume'].mean()
+    dias_queda_volume_alto = recent_df[(recent_df['Close'] < recent_df['Close'].shift(1)) & (recent_df['Volume'] > media_volume)]
+    if not dias_queda_volume_alto.empty:
+        risco += 1
+
+    # Rompimento de topo com volume alto
+    if df['rompe_resistencia'].iloc[-1] and df['Volume'].iloc[-1] > df['Volume'].rolling(20).mean().iloc[-1]:
+        risco -= 1
+
+    # Médias alinhadas
+    if df['EMA20'].iloc[-1] > df['SMA50'].iloc[-1] > df['SMA150'].iloc[-1] > df['SMA200'].iloc[-1]:
+        risco -= 1
+
+    return int(min(max(round(risco), 1), 10))
+
+# --- Função de análise IA aprimorada ---
 def gerar_comentario(df, risco, tendencia, vcp):
     comentario = f"Tendência: {tendencia}. "
     if df['momentum_up'].iloc[-1] and df['rompe_resistencia'].iloc[-1]:
@@ -314,20 +345,65 @@ def gerar_comentario(df, risco, tendencia, vcp):
         comentario += "Rompimento de resistência detectado. "
     else:
         comentario += "Sem sinais fortes de entrada. "
+
     if vcp:
-        comentario += " | Padrão VCP detectado 🔍"
+        comentario += "| Padrão VCP detectado 🔍"
 
     PP, suportes, resistencias = calcular_pivot_points(df)
     preco_atual = df['Close'].iloc[-1]
-    comentario += f" Preço atual: {preco_atual:.2f}"
-    comentario += " | Suportes: " + ', '.join(f"{s:.2f} ({((s - preco_atual)/preco_atual)*100:+.2f}%)" for s in suportes)
-    comentario += " | Resistências: " + ', '.join(f"{r:.2f} ({((r - preco_atual)/preco_atual)*100:+.2f}%)" for r in resistencias)
+
+    dists_suportes = [(s, ((s - preco_atual)/preco_atual)*100) for s in suportes]
+    dists_resist = [(r, ((r - preco_atual)/preco_atual)*100) for r in resistencias]
+
+    suporte_mais_prox = min(dists_suportes, key=lambda x: abs(x[1]))
+    resistencia_mais_prox = min(dists_resist, key=lambda x: abs(x[1]))
+
+    outros_suportes = [f"{s:.2f} ({d:+.2f}%)" for s, d in dists_suportes if s != suporte_mais_prox[0]]
+    outros_resistencias = [f"{r:.2f} ({d:+.2f}%)" for r, d in dists_resist if r != resistencia_mais_prox[0]]
+
+    comentario += f"\n\n📈 Resistência mais próxima: {resistencia_mais_prox[0]:.2f} ({resistencia_mais_prox[1]:+.2f}%)"
+    if outros_resistencias:
+        comentario += f"\n🔴 Outras: {', '.join(outros_resistencias)}"
+
+    comentario += f"\n\n📌 Preço atual: {preco_atual:.2f}"
+
+    comentario += f"\n\n📉 Suporte mais próximo: {suporte_mais_prox[0]:.2f} ({suporte_mais_prox[1]:+.2f}%)"
+    if outros_suportes:
+        comentario += f"\n🟢 Outros: {', '.join(outros_suportes)}"
+
+    comentario += "\n\n"
+
+    if df['rompe_resistencia'].iloc[-1]:
+        comentario += f"⚠️ Atenção: possível rompimento técnico se superar {resistencia_mais_prox[0]:.2f} com volume."
+    elif preco_atual < suporte_mais_prox[0]:
+        comentario += f"⚠️ Alerta: perda do suporte em {suporte_mais_prox[0]:.2f} pode intensificar queda."
+    else:
+        comentario += f"📊 Ativo em zona de observação técnica entre suportes e resistências."
+
+    if risco <= 3:
+        comentario += "\n🟢 Força Técnica: Forte"
+    elif risco >= 8:
+        comentario += "\n🔴 Força Técnica: Fraca"
+    else:
+        comentario += "\n🟡 Força Técnica: Neutra"
+
+    df['TR'] = np.maximum(df['High'] - df['Low'], np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
+    atr = df['TR'].rolling(14).mean().iloc[-1]
+    vol_media = df['Volume'].rolling(20).mean().iloc[-1]
+
+    atr_class = "📈 Alta" if atr / preco_atual > 0.05 else "📉 Baixa"
+    vol_class = "📦 Muito alto" if vol_media > 10_000_000 else "📦 Moderado"
+
+    comentario += f"\n📏 ATR (volatilidade): {atr:.2f} ({atr_class}) | Volume médio: {vol_media:,.0f} ({vol_class})"
+
     return comentario
+
 
 # ---------------------- INTERFACE STREAMLIT ----------------------
 
 
 st.title("🚀🔍")
+
 
 threshold = st.sidebar.slider("⚡ Limite de momentum", 0.01, 0.2, 0.07)
 dias_breakout = st.sidebar.slider("\U0001F4C8 Breakout da máxima dos últimos X dias", 10, 60, 20)
@@ -343,7 +419,6 @@ ordenamento_mm = st.sidebar.checkbox("\U0001F4D0 EMA20 > SMA50 > SMA150 > SMA200
 sma200_crescente = st.sidebar.checkbox("\U0001F4C8 SMA200 maior que há 30 dias", value=False)
 executar = st.sidebar.button("\U0001F50D Iniciar análise")
 ticker_manual = st.sidebar.text_input("\U0001F4CC Ver gráfico de um ticker específico (ex: AAPL)", key="textinput_ticker_manual").upper()
-
 
 if executar:
     st.session_state.recomendacoes = []
@@ -398,8 +473,8 @@ if executar:
                 fig = plot_ativo(df, ticker, nome, vcp_detectado)
                 st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker}")
             st.markdown(f"📅 {earnings_str}")
-            st.markdown(f"**\U0001F9E0 Análise IA:** {comentario}")
-            st.markdown(f"**📉 Risco (1–10):** {risco} — **Tendência:** {tendencia}")
+            st.markdown(f"**🧠 Análise IA:** {comentario} | 📉 Risco (1–10): {risco}")
+
 
             st.session_state.recomendacoes.append({
                 "Ticker": ticker,
@@ -442,5 +517,4 @@ if ticker_manual:
         fig = plot_ativo(df, ticker_manual, nome, vcp_detectado)
         st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker_manual}_manual")
     st.markdown(f"📅 {earnings_str}")
-    st.markdown(f"**\U0001F9E0 Análise IA:** {comentario}")
-    st.markdown(f"**📉 Risco (1–10):** {risco} — **Tendência:** {tendencia}")
+    st.markdown(f"**🧠 Análise IA:** {comentario} | 📉 Risco (1–10): {risco}")
