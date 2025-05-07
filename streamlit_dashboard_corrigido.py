@@ -8,8 +8,281 @@ import plotly.express as px
 import time
 from plotly.subplots import make_subplots
 import datetime
+import pyrebase
+import firebase_admin
+from firebase_admin import credentials, auth as admin_auth
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from cryptography.hazmat.primitives import serialization
 
-st.set_page_config(layout="wide")
+# Esconder menu e rodapé do Streamlit
+hide_streamlit_style = """
+    <style>
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+
+# --- Verifica chave privada
+try:
+    key = st.secrets["firebase_admin"]["private_key"]
+    serialization.load_pem_private_key(key.encode(), password=None)
+except Exception as e:
+    st.error(f"❌ Erro na chave privada: {e}")
+    st.stop()
+
+# --- Inicializa o Firebase Admin SDK
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate(dict(st.secrets["firebase_admin"]))
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Erro ao inicializar Firebase: {e}")
+        st.stop()
+
+# --- Configura Pyrebase ---
+firebase_config = {
+    "apiKey": st.secrets["firebase_apiKey"],
+    "authDomain": st.secrets["firebase_authDomain"],
+    "projectId": st.secrets["firebase_projectId"],
+    "storageBucket": st.secrets["firebase_storageBucket"],
+    "messagingSenderId": st.secrets["firebase_messagingSenderId"],
+    "appId": st.secrets["firebase_appId"],
+    "measurementId": st.secrets.get("firebase_measurementId", None),
+    "databaseURL": "https://breakmomemtum-default-rtdb.firebaseio.com"
+}
+
+firebase = pyrebase.initialize_app(firebase_config)
+auth = firebase.auth()
+
+ADMIN_EMAILS = ["felipekuffel@gmail.com"]
+DEFAULT_SMTP_EMAIL = "felipekuffel@gmail.com"
+DEFAULT_SMTP_SENHA = st.secrets["smtp_senha"]
+
+# --- Login / Registro ---
+def login_firebase():
+    st.title("Login - Painel de Análise Técnica")
+    aba = st.radio("Selecionar", ["Login", "Registrar"])
+
+    email = st.text_input("Email")
+    password = st.text_input("Senha", type="password")
+
+    if aba == "Login":
+        if st.button("Entrar"):
+            try:
+                user = auth.sign_in_with_email_and_password(email, password)
+                user_id = user["localId"]
+                st.session_state.user = user
+                st.session_state.email = email
+
+                if email not in ADMIN_EMAILS:
+                    trial_info = firebase.database().child("trials").child(user_id).get()
+                    if trial_info.val() is None:
+                        expiration_date = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+                        firebase.database().child("trials").child(user_id).set({"trial_expiration": expiration_date})
+                        st.info("✅ Trial criado automaticamente.")
+                    else:
+                        trial_expiration = datetime.datetime.strptime(trial_info.val()["trial_expiration"], "%Y-%m-%d")
+                        if trial_expiration < datetime.datetime.utcnow():
+                            st.error("⛔️ Trial expirado. Faça upgrade.")
+                            st.stop()
+
+                st.session_state.login_success = True
+                st.rerun()
+            except Exception as e:
+                st.error("Email ou senha incorretos.")
+
+    elif aba == "Registrar":
+        if st.button("Criar Conta"):
+            try:
+                user = auth.create_user_with_email_and_password(email, password)
+                user_id = user["localId"]
+                expiration_date = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+                firebase.database().child("trials").child(user_id).set({"trial_expiration": expiration_date})
+                st.success("Usuário criado com sucesso! Faça login.")
+                st.session_state.login_success = True
+                st.rerun()
+            except Exception as e:
+                if "EMAIL_EXISTS" in str(e):
+                    st.error("⚠️ Email já registrado. Faça login.")
+                else:
+                    st.error(f"Erro ao registrar: {e}")
+
+# --- Logout ---
+def logout():
+    if st.sidebar.button("Sair"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+# --- Verificação de login ---
+if "user" not in st.session_state:
+    if st.session_state.get("login_success"):
+        del st.session_state["login_success"]
+        st.rerun()
+    else:
+        login_firebase()
+        st.stop()
+else:
+    # Garante que menu_value esteja definido
+    if "menu_value" not in st.session_state:
+        st.session_state.menu_value = "Dashboard"
+
+# --- Admin ---
+menu = st.session_state.menu_value
+
+if menu == "Admin":
+    st.title("Painel de Administração")
+    st.info("Acesso restrito ao administrador.")
+
+    def listar_usuarios_firebase():
+        users = []
+        page = admin_auth.list_users()
+        for user in page.iterate_all():
+            uid = user.uid
+            trial_data = firebase.database().child("trials").child(uid).get().val()
+            dias = '-'  # valor padrão
+            raw_exp = None
+            alerta = "N/A"
+            if trial_data and "trial_expiration" in trial_data:
+                raw_exp_str = trial_data["trial_expiration"]
+                try:
+                    exp_date = datetime.datetime.strptime(raw_exp_str, "%Y-%m-%d")
+                    dias = (exp_date - datetime.datetime.utcnow()).days
+                    if dias < 0:
+                        alerta = "❌ EXPIRADO"
+                    elif dias <= 3:
+                        alerta = f"⚠️ {dias} dias restantes"
+                    else:
+                        alerta = "✅ Ativo"
+                    raw_exp = exp_date.strftime("%d/%m/%Y")
+                except:
+                    raw_exp = "Formato inválido"
+                    alerta = "⚠️ Erro de data"
+            else:
+                alerta = "❌ Sem trial"
+                raw_exp = "-"
+
+            users.append({
+                "Email": user.email,
+                "UID": uid,
+                "Verificado": user.email_verified,
+                "Criado em": pd.to_datetime(user.user_metadata.creation_timestamp, unit='ms'),
+                "Último login": pd.to_datetime(user.user_metadata.last_sign_in_timestamp, unit='ms') if user.user_metadata.last_sign_in_timestamp else None,
+                "Trial expira em": raw_exp,
+                "Dias restantes": dias if isinstance(dias, int) else '-',
+                "Status do Trial": alerta
+            })
+        return pd.DataFrame(users)
+
+    st.subheader("Usuários cadastrados no Firebase")
+    df_users = listar_usuarios_firebase()
+
+    filtro_email = st.text_input("🔍 Filtrar por email")
+    if filtro_email:
+        df_users = df_users[df_users['Email'].str.contains(filtro_email, case=False, na=False)]
+
+    df_users_formatado = df_users.copy()
+    if "Dias restantes" in df_users_formatado:
+        df_users_formatado["Dias restantes"] = df_users_formatado["Dias restantes"].astype(str)
+    for col in ["Criado em", "Último login"]:
+        if col in df_users_formatado:
+            df_users_formatado[col] = df_users_formatado[col].dt.strftime("%d/%m/%Y")
+    if "UID" in df_users_formatado.columns:
+        df_users_formatado.drop(columns=["UID"], inplace=True)
+    st.dataframe(df_users_formatado)
+    csv_export = df_users.drop(columns=["UID"]).to_csv(index=False, date_format='%d/%m/%Y').encode()
+    st.download_button("⬇️ Baixar CSV", csv_export, file_name="usuarios_firebase.csv")
+
+    st.markdown("---")
+    st.subheader("Renovar trial manualmente ou editar dias restantes")
+    dias_trial = st.number_input("Quantos dias renovar?", min_value=1, max_value=365, value=7)
+    email_para_renovar = st.text_input("Email do usuário para renovar")
+    if st.button("Renovar Trial por Email"):
+        linha = df_users[df_users["Email"] == email_para_renovar]
+        if linha.empty:
+            st.error("❌ Email não encontrado na lista de usuários.")
+        else:
+            try:
+                uid_email = linha.iloc[0]["UID"]
+                st.session_state.uid_renovar_auto = uid_email
+                nova_data = (datetime.datetime.utcnow() + datetime.timedelta(days=int(dias_trial))).strftime("%Y-%m-%d")
+                firebase.database().child("trials").child(uid_email).set({"trial_expiration": nova_data})
+                st.success(f"Trial de {email_para_renovar} renovado até {nova_data}")
+                st.session_state.pop("uid_renovar_auto", None)
+                st.session_state.pop("uid_para_excluir_auto", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao renovar: {e}")
+
+    
+    st.markdown("---")
+    st.subheader("Excluir usuário (UID)")
+    email_para_excluir = st.text_input("Buscar UID para exclusão por email")
+    if email_para_excluir:
+        linha = df_users[df_users['Email'] == email_para_excluir]
+        if not linha.empty:
+            st.session_state.uid_para_excluir_auto = linha.iloc[0]['UID']
+            st.success(f"UID encontrado: {st.session_state.uid_para_excluir_auto}")
+        else:
+            st.warning("Email não encontrado.")
+
+    if not email_para_excluir or email_para_excluir not in df_users["Email"].values or "uid_para_excluir_auto" not in st.session_state:
+        uid_para_excluir = st.text_input("Digite o UID do usuário para excluir", value=st.session_state.get("uid_para_excluir_auto", ""))
+    if st.button("Excluir usuário"):
+        try:
+            admin_auth.delete_user(uid_para_excluir)
+            st.success("Usuário excluído com sucesso.")
+        except Exception as e:
+            st.error(f"Erro ao excluir: {e}")
+
+    st.markdown("---")
+    st.subheader("Enviar notificação por email (SMTP)")
+    email_destino = st.text_input("Email do destinatário")
+    mensagem = st.text_area("Mensagem para o usuário")
+
+    if st.button("Enviar aviso"):
+        if email_destino and mensagem:
+            try:
+                msg = MIMEMultipart()
+                msg['From'] = DEFAULT_SMTP_EMAIL
+                msg['To'] = email_destino
+                msg['Subject'] = "Notificação do Administrador"
+                msg.attach(MIMEText(mensagem, 'plain'))
+
+                with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                    server.login(DEFAULT_SMTP_EMAIL, DEFAULT_SMTP_SENHA)
+                    server.send_message(msg)
+
+                st.success(f"Email enviado com sucesso para {email_destino}")
+            except Exception as e:
+                st.error(f"Erro ao enviar: {e}")
+        else:
+            st.warning("Preencha todos os campos corretamente.")
+
+# --- Dashboard ---
+if menu == "Dashboard":
+    st.title("Dashboard de Análise Técnica")
+
+    # Exibir status do trial para usuários não-admin
+    if st.session_state.email not in ADMIN_EMAILS:
+        user_id = st.session_state.user["localId"]
+        trial_info = firebase.database().child("trials").child(user_id).get()
+        if trial_info.val() and "trial_expiration" in trial_info.val():
+            try:
+                trial_expiration = datetime.datetime.strptime(trial_info.val()["trial_expiration"], "%Y-%m-%d")
+                dias_restantes = (trial_expiration - datetime.datetime.utcnow()).days
+                status = "✅ Ativo" if dias_restantes >= 0 else "❌ Expirado"
+                st.info(f"Plano: Trial 7 dias  |  Dias restantes: {dias_restantes}  |  Status: {status}")
+            except:
+                st.warning("⚠️ Erro ao processar data de expiração do trial.")
+        else:
+            st.warning("⚠️ Nenhuma informação de trial encontrada.")
+    st.write("✅ Painel carregado com sucesso!")
+
 
 # --- Função de earnings detalhado ---
 def get_earnings_info_detalhado(ticker):
@@ -419,6 +692,23 @@ ordenamento_mm = st.sidebar.checkbox("\U0001F4D0 EMA20 > SMA50 > SMA150 > SMA200
 sma200_crescente = st.sidebar.checkbox("\U0001F4C8 SMA200 maior que há 30 dias", value=False)
 executar = st.sidebar.button("\U0001F50D Iniciar análise")
 ticker_manual = st.sidebar.text_input("\U0001F4CC Ver gráfico de um ticker específico (ex: AAPL)", key="textinput_ticker_manual").upper()
+# Elementos finais da barra lateral
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Usuário:** {st.session_state.user['email']}")
+
+# Menu lateral (Dashboard/Admin)
+if st.session_state.email in ADMIN_EMAILS:
+    menu = st.sidebar.radio("Menu", ["Dashboard", "Admin"], key="menu_selector")
+else:
+    menu = "Dashboard"
+st.session_state.menu_value = menu
+
+# Botão de logout
+if st.sidebar.button("🚪 Sair"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
 
 if executar:
     st.session_state.recomendacoes = []
