@@ -22,10 +22,10 @@ def get_earnings_info_detalhado(ticker):
         ticker_obj = yf.Ticker(ticker)
         calendar = ticker_obj.calendar
 
+        # Trata caso 'Earnings Date' esteja como coluna (ex: AAPL)
         if isinstance(calendar, pd.DataFrame) and not calendar.empty:
-            # Transpor se necessário (AAPL vem com 'Earnings Date' como coluna)
             if 'Earnings Date' in calendar.columns:
-                earnings_date = calendar.loc['Earnings Date'].values[0]
+                earnings_date = calendar['Earnings Date'].values[0]
             elif 'Earnings Date' in calendar.index:
                 earnings_date = calendar.loc['Earnings Date'][0]
             else:
