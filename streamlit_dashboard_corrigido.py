@@ -16,23 +16,22 @@ def get_nome_empresa(ticker):
     except Exception:
         return ticker
 
+# --- Função de earnings detalhado ---
 def get_earnings_info_detalhado(ticker):
     try:
         ticker_obj = yf.Ticker(ticker)
         calendar = ticker_obj.calendar
 
-        if isinstance(calendar, pd.DataFrame):
-            if 'Earnings Date' in calendar.index and pd.notna(calendar.loc['Earnings Date'][0]):
-                earnings_date = calendar.loc['Earnings Date'][0]
-                if isinstance(earnings_date, pd.Timestamp):
-                    now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
-                    delta = (earnings_date - now).days
-                    data_str = earnings_date.strftime('%d %b %Y')
-                    if delta >= 0:
-                        return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
-                    else:
-                        return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
-
+        if hasattr(calendar, 'index') and 'Earnings Date' in calendar.index:
+            earnings_date = calendar.loc['Earnings Date'][0]
+            if isinstance(earnings_date, pd.Timestamp) and pd.notna(earnings_date):
+                now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
+                delta = (earnings_date - now).days
+                data_str = earnings_date.strftime('%d %b %Y')
+                if delta >= 0:
+                    return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
+                else:
+                    return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
         return "Indisponível", None, None
     except Exception as e:
         return f"Erro: {e}", None, None
@@ -335,6 +334,7 @@ ordenamento_mm = st.sidebar.checkbox("\U0001F4D0 EMA20 > SMA50 > SMA150 > SMA200
 sma200_crescente = st.sidebar.checkbox("\U0001F4C8 SMA200 maior que há 30 dias", value=False)
 executar = st.sidebar.button("\U0001F50D Iniciar análise")
 ticker_manual = st.sidebar.text_input("\U0001F4CC Ver gráfico de um ticker específico (ex: AAPL)", key="textinput_ticker_manual").upper()
+
 
 if executar:
     st.session_state.recomendacoes = []
