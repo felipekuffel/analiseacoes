@@ -22,8 +22,15 @@ def get_earnings_info_detalhado(ticker):
         ticker_obj = yf.Ticker(ticker)
         calendar = ticker_obj.calendar
 
-        if hasattr(calendar, 'index') and 'Earnings Date' in calendar.index:
-            earnings_date = calendar.loc['Earnings Date'][0]
+        if isinstance(calendar, pd.DataFrame) and not calendar.empty:
+            # Transpor se necessário (AAPL vem com 'Earnings Date' como coluna)
+            if 'Earnings Date' in calendar.columns:
+                earnings_date = calendar.loc['Earnings Date'].values[0]
+            elif 'Earnings Date' in calendar.index:
+                earnings_date = calendar.loc['Earnings Date'][0]
+            else:
+                return "Indisponível", None, None
+
             if isinstance(earnings_date, pd.Timestamp) and pd.notna(earnings_date):
                 now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
                 delta = (earnings_date - now).days
@@ -32,9 +39,11 @@ def get_earnings_info_detalhado(ticker):
                     return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
                 else:
                     return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
+
         return "Indisponível", None, None
     except Exception as e:
         return f"Erro: {e}", None, None
+
 
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
