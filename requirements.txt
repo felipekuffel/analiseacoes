@@ -1,6 +1,17 @@
-streamlit
-yfinance
-finvizfinance
-pandas
-numpy
-plotly
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from finvizfinance.screener.overview import Overview
+import plotly.graph_objects as go
+import plotly.express as px
+import time
+from plotly.subplots import make_subplots
+import datetime
+import pyrebase
+import firebase_admin
+from firebase_admin import credentials, auth as admin_auth
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from cryptography.hazmat.primitives import serialization
