@@ -16,7 +16,23 @@ def get_nome_empresa(ticker):
     except Exception:
         return ticker
 
-
+# --- Função de earnings detalhado ---
+def get_earnings_info_detalhado(ticker):
+    try:
+        info = yf.Ticker(ticker).calendar
+        if info is not None and not info.empty:
+            now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
+            earnings_date = info.loc['Earnings Date'].iloc[0]
+            if isinstance(earnings_date, pd.Timestamp):
+                delta = (earnings_date - now).days
+                data_str = earnings_date.strftime('%d %b %Y')
+                if delta >= 0:
+                    return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
+                else:
+                    return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
+        return "Indisponível", None, None
+    except Exception:
+        return "Erro", None, None
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     df = df.tail(150).copy()
@@ -301,22 +317,20 @@ def gerar_comentario(df, risco, tendencia, vcp):
 
 st.title("🚀🔍")
 
-# --- SIDEBAR CONFIG ---
 threshold = st.sidebar.slider("⚡ Limite de momentum", 0.01, 0.2, 0.07)
-dias_breakout = st.sidebar.slider("📈 Breakout da máxima dos últimos X dias", 10, 60, 20)
-lookback = st.sidebar.slider("📊 Candles recentes analisados", 3, 10, 5)
-sinal = st.sidebar.selectbox("🎯 Filtrar por sinal", ["Todos", "Ambos", "Momentum", "Breakout"])
-performance = st.sidebar.selectbox("📊 Filtro de desempenho", [
+dias_breakout = st.sidebar.slider("\U0001F4C8 Breakout da máxima dos últimos X dias", 10, 60, 20)
+lookback = st.sidebar.slider("\U0001F4CA Candles recentes analisados", 3, 10, 5)
+sinal = st.sidebar.selectbox("\U0001F3AF Filtrar por sinal", ["Todos", "Ambos", "Momentum", "Breakout"])
+performance = st.sidebar.selectbox("\U0001F4CA Filtro de desempenho", [
     "Quarter Up", "Quarter +10%", "Quarter +20%", "Quarter +30%", "Quarter +50%",
     "Half Up", "Half +10%", "Half +20%", "Half +30%", "Half +50%", "Half +100%",
     "Year Up", "Year +10%", "Year +20%", "Year +30%", "Year +50%", "Year +100%",
-    "Year +200%", "Year +300%", "Year +500%"
-], index=15)
-mostrar_vcp = st.sidebar.checkbox("🔎 Mostrar apenas ativos com padrão VCP", value=False, key="checkbox_vcp")
-ordenamento_mm = st.sidebar.checkbox("📐 EMA20 > SMA50 > SMA150 > SMA200", value=False)
-sma200_crescente = st.sidebar.checkbox("📈 SMA200 maior que há 30 dias", value=False)
-executar = st.sidebar.button("🔍 Iniciar análise")
-ticker_manual = st.sidebar.text_input("📌 Ver gráfico de um ticker específico (ex: AAPL)", key="textinput_ticker_manual").upper()
+    "Year +200%", "Year +300%", "Year +500%"], index=15)
+mostrar_vcp = st.sidebar.checkbox("\U0001F50E Mostrar apenas ativos com padrão VCP", value=False, key="checkbox_vcp")
+ordenamento_mm = st.sidebar.checkbox("\U0001F4D0 EMA20 > SMA50 > SMA150 > SMA200", value=False)
+sma200_crescente = st.sidebar.checkbox("\U0001F4C8 SMA200 maior que há 30 dias", value=False)
+executar = st.sidebar.button("\U0001F50D Iniciar análise")
+ticker_manual = st.sidebar.text_input("\U0001F4CC Ver gráfico de um ticker específico (ex: AAPL)", key="textinput_ticker_manual").upper()
 
 if executar:
     st.session_state.recomendacoes = []
@@ -324,15 +338,11 @@ if executar:
     screener.set_filter(filters_dict={"Performance": performance, "Average Volume": "Over 300K"})
     tickers = screener.screener_view()['Ticker'].tolist()
 
-    total_momentum = 0
-    total_breakout = 0
-    total_ambos = 0
-
     progress = st.progress(0)
     status_text = st.empty()
 
     for i, ticker in enumerate(tickers):
-        status_text.text(f"🔍 Analisando {ticker} ({i+1}/{len(tickers)})...")
+        status_text.text(f"\U0001F50D Analisando {ticker} ({i+1}/{len(tickers)})...")
         try:
             df = yf.download(ticker, period="18mo", interval="1d", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
@@ -361,53 +371,30 @@ if executar:
                 case "Ambos": cond = ambos_cond
                 case _: cond = True
 
-            if not cond: continue
+            if not cond:
+                continue
 
             nome = yf.Ticker(ticker).info.get("shortName", ticker)
             risco = avaliar_risco(df)
             tendencia = classificar_tendencia(df['Close'].tail(20))
             comentario = gerar_comentario(df, risco, tendencia, vcp_detectado)
+            earnings_str, _, _ = get_earnings_info_detalhado(ticker)
 
             st.subheader(f"{ticker} - {nome}")
             with st.spinner(f"Carregando gráfico de {ticker}..."):
                 fig = plot_ativo(df, ticker, nome, vcp_detectado)
                 st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker}")
-
-            st.markdown(f"**🧠 Análise IA:** {comentario}")
-                        # Obter dados de resultados
-            try:
-                ticker_obj = yf.Ticker(ticker_manual if 'ticker_manual' in locals() and ticker_manual else ticker)
-                calendar = ticker_obj.calendar
-                earnings_dates = ticker_obj.earnings_dates
-
-                data_hoje = pd.Timestamp.today()
-
-                # Próximo resultado
-                try:
-                    data_proximo_resultado = calendar.loc['Earnings Date']
-                    dias_ate_proximo = (data_proximo_resultado - data_hoje).days
-                    texto_proximo = f" | 📅 Próx. resultado: {data_proximo_resultado.strftime('%d-%m-%Y')} (em {dias_ate_proximo} dias)"
-                except Exception:
-                    texto_proximo = ""
-
-                # Último resultado
-                try:
-                    data_ultimo_resultado = earnings_dates.index[0]
-                    dias_desde_ultimo = (data_hoje - data_ultimo_resultado).days
-                    texto_ultimo = f" | 🕓 Último resultado: {data_ultimo_resultado.strftime('%d-%m-%Y')} (há {dias_desde_ultimo} dias)"
-                except Exception:
-                    texto_ultimo = ""
-
-            except Exception:
-                texto_proximo = texto_ultimo = ""
-
-            # Exibir com os outros dados
-            st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`{texto_proximo}{texto_ultimo}")
-
+            st.markdown(f"📅 {earnings_str}")
+            st.markdown(f"**\U0001F9E0 Análise IA:** {comentario}")
+            st.markdown(f"**📉 Risco (1–10):** {risco} — **Tendência:** {tendencia}")
 
             st.session_state.recomendacoes.append({
-                "Ticker": ticker, "Empresa": nome, "Risco": risco,
-                "Tendência": tendencia, "Comentário": comentario
+                "Ticker": ticker,
+                "Empresa": nome,
+                "Risco": risco,
+                "Tendência": tendencia,
+                "Comentário": comentario,
+                "Earnings": earnings_str
             })
 
         except Exception as e:
@@ -417,8 +404,6 @@ if executar:
 
     status_text.empty()
     progress.empty()
-
-
 
     if st.session_state.recomendacoes:
         st.subheader("📋 Tabela Final de Recomendações")
@@ -437,34 +422,12 @@ if ticker_manual:
     risco = avaliar_risco(df)
     tendencia = classificar_tendencia(df['Close'].tail(20))
     comentario = gerar_comentario(df, risco, tendencia, vcp_detectado)
+    earnings_str, _, _ = get_earnings_info_detalhado(ticker_manual)
+
     st.subheader(f"{ticker_manual} - {nome}")
     with st.spinner(f"Carregando gráfico de {ticker_manual}..."):
         fig = plot_ativo(df, ticker_manual, nome, vcp_detectado)
         st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker_manual}_manual")
-    st.markdown(f"**🧠 Análise IA:** {comentario}")
-    # Obter dados de resultados
-    ticker_obj = yf.Ticker(ticker_manual if ticker_manual else ticker)
-    calendar = ticker_obj.calendar
-    earnings_dates = ticker_obj.earnings_dates
-
-    data_hoje = pd.Timestamp.today()
-
-    # Próximo resultado
-    try:
-        data_proximo_resultado = calendar.loc['Earnings Date'][0]
-        dias_ate_proximo = (data_proximo_resultado - data_hoje).days
-        texto_proximo = f" | 📅 Próx. resultado: {data_proximo_resultado.strftime('%d-%m-%Y')} (em {dias_ate_proximo} dias)"
-    except Exception:
-        texto_proximo = ""
-
-    # Último resultado
-    try:
-        data_ultimo_resultado = earnings_dates.index[0]
-        dias_desde_ultimo = (data_hoje - data_ultimo_resultado).days
-        texto_ultimo = f" | 🕓 Último resultado: {data_ultimo_resultado.strftime('%d-%m-%Y')} (há {dias_desde_ultimo} dias)"
-    except Exception:
-        texto_ultimo = ""
-
-    # Exibir com os outros dados
-    st.markdown(f"**📉 Risco (1–10):** `{risco}` — **Tendência:** `{tendencia}`{texto_proximo}{texto_ultimo}")
-
+    st.markdown(f"📅 {earnings_str}")
+    st.markdown(f"**\U0001F9E0 Análise IA:** {comentario}")
+    st.markdown(f"**📉 Risco (1–10):** {risco} — **Tendência:** {tendencia}")
