@@ -19,20 +19,22 @@ def get_nome_empresa(ticker):
 # --- Função de earnings detalhado ---
 def get_earnings_info_detalhado(ticker):
     try:
-        info = yf.Ticker(ticker).calendar
-        if info is not None and not info.empty:
-            now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
-            earnings_date = info.loc['Earnings Date'].iloc[0]
-            if isinstance(earnings_date, pd.Timestamp):
-                delta = (earnings_date - now).days
-                data_str = earnings_date.strftime('%d %b %Y')
-                if delta >= 0:
-                    return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
-                else:
-                    return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
+        ticker_obj = yf.Ticker(ticker)
+        if ticker_obj.calendar is not None and not ticker_obj.calendar.empty:
+            if 'Earnings Date' in ticker_obj.calendar.index:
+                earnings_date = ticker_obj.calendar.loc['Earnings Date'][0]
+                if isinstance(earnings_date, pd.Timestamp) and not pd.isna(earnings_date):
+                    now = pd.Timestamp.now(tz="UTC").tz_convert("America/New_York")
+                    delta = (earnings_date - now).days
+                    data_str = earnings_date.strftime('%d %b %Y')
+                    if delta >= 0:
+                        return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
+                    else:
+                        return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
         return "Indisponível", None, None
-    except Exception:
-        return "Erro", None, None
+    except Exception as e:
+        return"Erro: {str(e)}", None, None
+
 
 def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     df = df.tail(150).copy()
