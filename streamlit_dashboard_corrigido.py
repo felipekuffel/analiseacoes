@@ -15,7 +15,12 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.hazmat.primitives import serialization
+from streamlit_autorefresh import st_autorefresh
+
 st.set_page_config(layout="wide")
+# Mantém o app ativo mesmo sem interação (a cada 8 minutos)
+st_autorefresh(interval=8 * 60 * 1000, key="keep_alive")  # 8 minutos
+
 
 # Esconder menu e rodapé do Streamlit
 hide_streamlit_style = """
@@ -65,56 +70,78 @@ DEFAULT_SMTP_SENHA = st.secrets["smtp_senha"]
 
 # --- Login / Registro ---
 def login_firebase():
-    st.title("Login - Painel de Análise Técnica")
-    aba = st.radio("Selecionar", ["Login", "Registrar"])
+    st.markdown("<h2 style='text-align: center;'>🔐 Login - Painel de Análise Técnica</h2>", unsafe_allow_html=True)
 
-    email = st.text_input("Email")
-    password = st.text_input("Senha", type="password")
+    # Centraliza o conteúdo da tela de login
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        aba = st.radio("Selecionar", ["Login", "Registrar"], horizontal=True)
+        email = st.text_input("Email")
+        password = st.text_input("Senha", type="password")
 
-    if aba == "Login":
-        if st.button("Entrar"):
-            try:
-                user = auth.sign_in_with_email_and_password(email, password)
-                user_id = user["localId"]
-                st.session_state.user = user
-                st.session_state.email = email
+        if aba == "Login":
+            if st.button("Entrar"):
+                try:
+                    user = auth.sign_in_with_email_and_password(email, password)
+                    user_id = user["localId"]
+                    st.session_state.user = user
+                    st.session_state.email = email
+                    st.session_state.refresh_token = user["refreshToken"]
 
-                if email not in ADMIN_EMAILS:
-                    trial_info = firebase.database().child("trials").child(user_id).get()
-                    if trial_info.val() is None:
-                        expiration_date = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
-                        firebase.database().child("trials").child(user_id).set({"trial_expiration": expiration_date})
-                        st.info("✅ Trial criado automaticamente.")
+                    if email not in ADMIN_EMAILS:
+                        trial_info = firebase.database().child("trials").child(user_id).get()
+                        if trial_info.val() is None:
+                            expiration_date = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+                            firebase.database().child("trials").child(user_id).set({"trial_expiration": expiration_date})
+                            st.info("✅ Trial criado automaticamente.")
+                        else:
+                            trial_expiration = datetime.datetime.strptime(trial_info.val()["trial_expiration"], "%Y-%m-%d")
+                            if trial_expiration < datetime.datetime.utcnow():
+                                st.error("⛔️ Trial expirado. Faça upgrade.")
+                                st.stop()
+
+                    st.session_state.login_success = True
+                    st.rerun()
+                except Exception as e:
+                    st.error("Email ou senha incorretos.")
+
+        elif aba == "Registrar":
+            if st.button("Criar Conta"):
+                try:
+                    user = auth.create_user_with_email_and_password(email, password)
+                    user_id = user["localId"]
+                    expiration_date = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+                    firebase.database().child("trials").child(user_id).set({"trial_expiration": expiration_date})
+                    st.success("Usuário criado com sucesso! Faça login.")
+                    st.session_state.login_success = True
+                    st.rerun()
+                except Exception as e:
+                    if "EMAIL_EXISTS" in str(e):
+                        st.error("⚠️ Email já registrado. Faça login.")
                     else:
-                        trial_expiration = datetime.datetime.strptime(trial_info.val()["trial_expiration"], "%Y-%m-%d")
-                        if trial_expiration < datetime.datetime.utcnow():
-                            st.error("⛔️ Trial expirado. Faça upgrade.")
-                            st.stop()
+                        st.error(f"Erro ao registrar: {e}")
 
-                st.session_state.login_success = True
-                st.rerun()
-            except Exception as e:
-                st.error("Email ou senha incorretos.")
-
-    elif aba == "Registrar":
-        if st.button("Criar Conta"):
-            try:
-                user = auth.create_user_with_email_and_password(email, password)
-                user_id = user["localId"]
-                expiration_date = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
-                firebase.database().child("trials").child(user_id).set({"trial_expiration": expiration_date})
-                st.success("Usuário criado com sucesso! Faça login.")
-                st.session_state.login_success = True
-                st.rerun()
-            except Exception as e:
-                if "EMAIL_EXISTS" in str(e):
-                    st.error("⚠️ Email já registrado. Faça login.")
-                else:
-                    st.error(f"Erro ao registrar: {e}")
 
 # --- Logout ---
 def logout():
     if st.sidebar.button("Sair"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+# --- Tentar restaurar sessão via refreshToken ---
+if "user" not in st.session_state and "refresh_token" in st.session_state:
+    try:
+        user = auth.refresh(st.session_state.refresh_token)
+        st.session_state.user = user
+        st.session_state.email = user["userId"]  # fallback (será corrigido logo abaixo)
+
+        # Obter email real do Firebase
+        account_info = auth.get_account_info(user["idToken"])
+        if account_info and "users" in account_info and len(account_info["users"]) > 0:
+            st.session_state.email = account_info["users"][0]["email"]
+    except Exception as e:
+        st.warning("❌ Sessão expirada. Faça login novamente.")
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
@@ -610,67 +637,22 @@ def avaliar_risco(df):
 
 # --- Função de análise IA aprimorada ---
 def gerar_comentario(df, risco, tendencia, vcp):
-    comentario = f"Tendência: {tendencia}. "
-    if df['momentum_up'].iloc[-1] and df['rompe_resistencia'].iloc[-1]:
-        comentario += "Sinal de força técnica detectado (momentum + rompimento). "
-    elif df['momentum_up'].iloc[-1]:
-        comentario += "Momentum positivo recente. "
-    elif df['rompe_resistencia'].iloc[-1]:
-        comentario += "Rompimento de resistência detectado. "
-    else:
-        comentario += "Sem sinais fortes de entrada. "
+    comentario = "📊 Ativo em zona de observação técnica"
 
-    if vcp:
-        comentario += "| Padrão VCP detectado 🔍"
-
-    PP, suportes, resistencias = calcular_pivot_points(df)
-    preco_atual = df['Close'].iloc[-1]
-
-    dists_suportes = [(s, ((s - preco_atual)/preco_atual)*100) for s in suportes]
-    dists_resist = [(r, ((r - preco_atual)/preco_atual)*100) for r in resistencias]
-
-    suporte_mais_prox = min(dists_suportes, key=lambda x: abs(x[1]))
-    resistencia_mais_prox = min(dists_resist, key=lambda x: abs(x[1]))
-
-    outros_suportes = [f"{s:.2f} ({d:+.2f}%)" for s, d in dists_suportes if s != suporte_mais_prox[0]]
-    outros_resistencias = [f"{r:.2f} ({d:+.2f}%)" for r, d in dists_resist if r != resistencia_mais_prox[0]]
-
-    comentario += f"\n\n📈 Resistência mais próxima: {resistencia_mais_prox[0]:.2f} ({resistencia_mais_prox[1]:+.2f}%)"
-    if outros_resistencias:
-        comentario += f"\n🔴 Outras: {', '.join(outros_resistencias)}"
-
-    comentario += f"\n\n📌 Preço atual: {preco_atual:.2f}"
-
-    comentario += f"\n\n📉 Suporte mais próximo: {suporte_mais_prox[0]:.2f} ({suporte_mais_prox[1]:+.2f}%)"
-    if outros_suportes:
-        comentario += f"\n🟢 Outros: {', '.join(outros_suportes)}"
-
-    comentario += "\n\n"
-
+    sinais = []
+    if df['momentum_up'].iloc[-1]:
+        sinais.append("Momentum")
     if df['rompe_resistencia'].iloc[-1]:
-        comentario += f"⚠️ Atenção: possível rompimento técnico se superar {resistencia_mais_prox[0]:.2f} com volume."
-    elif preco_atual < suporte_mais_prox[0]:
-        comentario += f"⚠️ Alerta: perda do suporte em {suporte_mais_prox[0]:.2f} pode intensificar queda."
-    else:
-        comentario += f"📊 Ativo em zona de observação técnica entre suportes e resistências."
+        sinais.append("Rompimento")
+    if vcp:
+        sinais.append("Padrão VCP")
 
-    if risco <= 3:
-        comentario += "\n🟢 Força Técnica: Forte"
-    elif risco >= 8:
-        comentario += "\n🔴 Força Técnica: Fraca"
-    else:
-        comentario += "\n🟡 Força Técnica: Neutra"
-
-    df['TR'] = np.maximum(df['High'] - df['Low'], np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
-    atr = df['TR'].rolling(14).mean().iloc[-1]
-    vol_media = df['Volume'].rolling(20).mean().iloc[-1]
-
-    atr_class = "📈 Alta" if atr / preco_atual > 0.05 else "📉 Baixa"
-    vol_class = "📦 Muito alto" if vol_media > 10_000_000 else "📦 Moderado"
-
-    comentario += f"\n📏 ATR (volatilidade): {atr:.2f} ({atr_class}) | Volume médio: {vol_media:,.0f} ({vol_class})"
+    if sinais:
+        comentario += f"\n📈 Sinais técnicos: {', '.join(sinais)}"
 
     return comentario
+
+
 
 
 # ---------------------- INTERFACE STREAMLIT ----------------------
@@ -697,14 +679,18 @@ ticker_manual = st.sidebar.text_input("\U0001F4CC Ver gráfico de um ticker espe
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**Usuário:** {st.session_state.user['email']}")
 
-# Menu lateral (Dashboard/Admin)
+# Define menu de acordo com o tipo de usuário
 if st.session_state.email in ADMIN_EMAILS:
-    menu = st.sidebar.radio("Menu", ["Dashboard", "Admin"], key="menu_selector")
-else:
-    menu = "Dashboard"
-st.session_state.menu_value = menu
+    menu_atual = st.sidebar.radio("Menu", ["Dashboard", "Admin"], key=f"menu_selector_{st.session_state.email}")
 
-# Botão de logout
+    # Atualiza e força recarregamento se mudou
+    if st.session_state.get("menu_value") != menu_atual:
+        st.session_state.menu_value = menu_atual
+        st.rerun()
+else:
+    st.session_state.menu_value = "Dashboard"
+
+# ✅ Botão de logout sempre visível
 if st.sidebar.button("🚪 Sair"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -759,12 +745,23 @@ if executar:
             comentario = gerar_comentario(df, risco, tendencia, vcp_detectado)
             earnings_str, _, _ = get_earnings_info_detalhado(ticker)
 
-            st.subheader(f"{ticker} - {nome}")
-            with st.spinner(f"Carregando gráfico de {ticker}..."):
-                fig = plot_ativo(df, ticker, nome, vcp_detectado)
-                st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker}")
-            st.markdown(f"📅 {earnings_str}")
-            st.markdown(f"**🧠 Análise IA:** {comentario} | 📉 Risco (1–10): {risco}")
+            with st.container():
+                st.subheader(f"{ticker} - {nome}")
+
+                col1, col2 = st.columns([3, 1])  # proporção 75% gráfico, 25% info
+
+                with col1:
+                    with st.spinner(f"📊 Carregando gráfico de {ticker}..."):
+                        fig = plot_ativo(df, ticker, nome, vcp_detectado)
+                        st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker}")
+
+                with col2:
+                    st.markdown("### 📊 Resumo")
+                    st.markdown(f"📅 **Earnings:** {earnings_str}")
+                    st.markdown(f"📉 **Risco:** `{risco}`")
+                    st.markdown("🧠 **Análise Técnica:**")
+                    st.markdown(comentario)
+
 
 
             st.session_state.recomendacoes.append({
@@ -790,11 +787,11 @@ if executar:
         st.dataframe(df_final, use_container_width=True)
         st.download_button("⬇️ Baixar CSV", df_final.to_csv(index=False).encode(), file_name="recomendacoes_ia.csv")
 
-# Gráfico individual
 if ticker_manual:
     df = yf.download(ticker_manual, period="18mo", interval="1d", progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
+
     df = calcular_indicadores(df, dias_breakout, threshold)
     vcp_detectado = detectar_vcp(df)
     nome = yf.Ticker(ticker_manual).info.get("shortName", ticker_manual)
@@ -804,8 +801,97 @@ if ticker_manual:
     earnings_str, _, _ = get_earnings_info_detalhado(ticker_manual)
 
     st.subheader(f"{ticker_manual} - {nome}")
-    with st.spinner(f"Carregando gráfico de {ticker_manual}..."):
-        fig = plot_ativo(df, ticker_manual, nome, vcp_detectado)
-        st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker_manual}_manual")
-    st.markdown(f"📅 {earnings_str}")
-    st.markdown(f"**🧠 Análise IA:** {comentario} | 📉 Risco (1–10): {risco}")
+    col1, col2 = st.columns([3, 2])
+
+    with col1:
+        with st.spinner(f"Carregando gráfico de {ticker_manual}..."):
+            fig = plot_ativo(df, ticker_manual, nome, vcp_detectado)
+            st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker_manual}_manual")
+
+    with col2:
+        st.markdown("### 📊 Resumo")
+        st.markdown(comentario)
+        st.markdown(f"📅 Próximo resultado: {earnings_str}")
+
+        preco = df["Close"].iloc[-1]
+        PP, suportes, resistencias = calcular_pivot_points(df)
+        dists_resist = [(r, ((r - preco) / preco) * 100) for r in resistencias]
+        dists_suportes = [(s, ((s - preco) / preco) * 100) for s in suportes]
+
+        resist_ordenado = sorted([r for r in dists_resist if r[0] > preco], key=lambda x: x[0])[:3]
+        suporte_ordenado = sorted([s for s in dists_suportes if s[0] < preco], key=lambda x: -x[0])[:3]
+
+        niveis = []
+
+        for i, (valor, _) in enumerate(resist_ordenado):
+            niveis.append({"Nível": f"🔺 {i + 1}ª Resistência", "Valor": valor})
+
+        for i, (valor, _) in enumerate(suporte_ordenado):
+            niveis.append({"Nível": f"🔻 {i + 1}º Suporte", "Valor": valor})
+
+        # Fibonacci retrações
+        swing_high = df["High"].rolling(40).max().iloc[-1]
+        swing_low = df["Low"].rolling(40).min().iloc[-1]
+        retracao_382 = swing_high - (swing_high - swing_low) * 0.382
+        retracao_618 = swing_high - (swing_high - swing_low) * 0.618
+
+        indicadores = {
+            "SMA 20": df["SMA20"].iloc[-1],
+            "SMA 50": df["SMA50"].iloc[-1],
+            "SMA 150": df["SMA150"].iloc[-1],
+            "SMA 200": df["SMA200"].iloc[-1],
+            "Máxima 52s": df["High"].rolling(252).max().iloc[-1],
+            "Mínima 52s": df["Low"].rolling(252).min().iloc[-1],
+            "Retração 38.2% (últ. 40d)": retracao_382,
+            "Retração 61.8% (últ. 40d)": retracao_618
+        }
+
+        for nome, valor in indicadores.items():
+            if "SMA" in nome:
+                nivel_nome = f"🟣 {nome}"
+            elif "Retração" in nome:
+                nivel_nome = f"📏 {nome}"
+            elif "Máxima" in nome:
+                nivel_nome = f"📈 {nome}"
+            elif "Mínima" in nome:
+                nivel_nome = f"📉 {nome}"
+            else:
+                nivel_nome = nome
+            niveis.append({"Nível": nivel_nome, "Valor": valor})
+
+        niveis.append({"Nível": "💰 Preço Atual", "Valor": preco})
+
+        df_niveis = pd.DataFrame(niveis)
+        df_niveis["DistânciaReal"] = (df_niveis["Valor"] - preco) / preco
+        df_niveis["Distância"] = (df_niveis["DistânciaReal"] * 100).map("{:+.2f}%".format)
+        df_niveis["Valor"] = df_niveis["Valor"].map("{:.2f}".format)
+        df_niveis.sort_values(by="Valor", ascending=False, inplace=True)
+        df_niveis.drop(columns=["DistânciaReal"], inplace=True)
+        df_niveis.reset_index(drop=True, inplace=True)
+        df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
+
+        def highlight_niveis(row):
+            nivel = row["Nível"]
+            if "Preço Atual" in nivel:
+                return ["background-color: #fff3b0; font-weight: bold;"] * 3
+            elif "🔺" in nivel:
+                return ["color: #1f77b4; font-weight: bold;"] * 3
+            elif "🔻" in nivel:
+                return ["color: #2ca02c; font-weight: bold;"] * 3
+            elif any(tag in nivel for tag in ["🟣", "📏", "📈", "📉"]):
+                return ["color: #9467bd; font-style: italic;"] * 3
+            return [""] * 3
+
+            # Ordena colunas corretamente
+        df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
+        df_niveis.reset_index(drop=True, inplace=True)  # garante índice único e ocultável
+
+        # Exibe tabela
+        st.markdown("#### 🧭 Níveis Técnicos e Indicadores")
+        st.dataframe(
+            df_niveis
+            .style.apply(highlight_niveis, axis=1)
+            .hide(axis="index"),
+            use_container_width=True,
+            height=600
+        )
