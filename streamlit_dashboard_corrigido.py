@@ -26,9 +26,6 @@ import requests
 
 
 st.set_page_config(layout="wide")
-# Mantém o app ativo mesmo sem interação (a cada 8 minutos)
-st_autorefresh(interval=8 * 60 * 1000, key="keep_alive")  # 8 minutos
-
 
 # Esconder menu e rodapé do Streamlit
 hide_streamlit_style = """
