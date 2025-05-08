@@ -16,7 +16,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.hazmat.primitives import serialization
 from streamlit_autorefresh import st_autorefresh
-import os
+import io
+import sys
+from contextlib import redirect_stdout, redirect_stderr
+import re
 
 st.set_page_config(layout="wide")
 # Mantém o app ativo mesmo sem interação (a cada 8 minutos)
@@ -294,7 +297,7 @@ if menu == "Admin":
 
 # --- Dashboard ---
 if menu == "Dashboard":
-    st.title("Dashboard de Análise Técnica")
+    #st.title("Dashboard de Análise Técnica")
 
     # Exibir status do trial para usuários não-admin
     if st.session_state.email not in ADMIN_EMAILS:
@@ -310,7 +313,6 @@ if menu == "Dashboard":
                 st.warning("⚠️ Erro ao processar data de expiração do trial.")
         else:
             st.warning("⚠️ Nenhuma informação de trial encontrada.")
-    st.write("✅ Painel carregado com sucesso!")
 
 
 # --- Função de earnings detalhado ---
@@ -331,7 +333,7 @@ def get_earnings_info_detalhado(ticker):
                 delta = (earnings_date - now).days
                 data_str = earnings_date.strftime('%d %b %Y')
                 if delta >= 0:
-                    return f"Próx: {data_str} (em {delta}d)", earnings_date, delta
+                    return f" {data_str} (em {delta}d)", earnings_date, delta
                 else:
                     return f"Último: {data_str} (há {-delta}d)", earnings_date, delta
 
@@ -375,7 +377,7 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     # OHLC (candles) por último para ficar por cima
     fig.add_trace(go.Ohlc(
         x=df['index_str'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        increasing_line_color="#2736e9", decreasing_line_color="#de32ae", line_width=3,
+        increasing_line_color="#2736e9", decreasing_line_color="#de32ae", line_width=2.5,
         showlegend=False, text=hovertext, hoverinfo='text'), row=1, col=1)
 
     
@@ -400,20 +402,21 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
     pct_price = df['Close'].iloc[-1]
 
     fig.update_layout(
-        xaxis=dict(type='category'),
-        xaxis2=dict(type='category'),
-        xaxis3=dict(type='category'),
-        title=f"{ticker} - {nome_empresa} - {pct_price:.2f}{pct_text}",
-        template='plotly_dark',
-        height=900,
-        hovermode='x unified',
-        xaxis_rangeslider_visible=False,
-        yaxis=dict(title='', side='right', type='linear', showgrid=False, zeroline=False),
-        yaxis2=dict(side='right', showgrid=False, zeroline=False),
-        yaxis3=dict(side='right', showgrid=False, zeroline=False),
-        legend=dict(x=1.05, y=1, traceorder='reversed', font_size=12),
-        bargap=0.1
-    )
+    xaxis=dict(type='category'),
+    xaxis2=dict(type='category'),
+    xaxis3=dict(type='category'),
+    title=f"{ticker} - {nome_empresa} - {pct_price:.2f}{pct_text}",
+    template='plotly_dark',
+    height=900,
+    hovermode='x unified',
+    xaxis_rangeslider_visible=False,
+    yaxis=dict(title='', side='right', type='linear', showgrid=False, zeroline=False),
+    yaxis2=dict(side='right', showgrid=False, zeroline=False),
+    yaxis3=dict(side='right', showgrid=False, zeroline=False),
+    showlegend=False,  # ❌ desabilita a legenda
+    bargap=0.1
+)
+
 
     # --- FLAT BASE (conforme já estava implementado) ---
     zonas_flat = []
@@ -659,9 +662,6 @@ def gerar_comentario(df, risco, tendencia, vcp):
 # ---------------------- INTERFACE STREAMLIT ----------------------
 
 
-st.title("🚀🔍")
-
-
 threshold = st.sidebar.slider("⚡ Limite de momentum", 0.01, 0.2, 0.07)
 dias_breakout = st.sidebar.slider("\U0001F4C8 Breakout da máxima dos últimos X dias", 10, 60, 20)
 lookback = st.sidebar.slider("\U0001F4CA Candles recentes analisados", 3, 10, 5)
@@ -697,31 +697,88 @@ if st.sidebar.button("🚪 Sair"):
         del st.session_state[key]
     st.rerun()
 
+def inserir_preco_no_meio(niveis: list, preco: float) -> pd.DataFrame:
+    df = pd.DataFrame(niveis)
+    df["Valor"] = df["Valor"].map(lambda x: float(f"{x:.2f}"))
+    df["DistânciaReal"] = (df["Valor"] - preco) / preco
+    df["Distância"] = (df["DistânciaReal"] * 100).map("{:+.2f}%".format)
+    df["Valor"] = df["Valor"].map("{:.2f}".format)
+    df.drop(columns=["DistânciaReal"], inplace=True)
+    df = df.dropna(how="any")
+
+    df_temp = df.copy()
+    df_temp["Valor_float"] = df_temp["Valor"].astype(float)
+
+    inserido = False
+    linhas_ordenadas = []
+
+    for _, row in df_temp.sort_values(by="Valor_float", ascending=False).iterrows():
+        if not inserido and float(row["Valor"]) < preco:
+            linhas_ordenadas.append({
+                "Nível": "💰 Preço Atual",
+                "Valor": f"{preco:.2f}",
+                "Distância": "{:+.2f}%".format(0)
+            })
+            inserido = True
+        linhas_ordenadas.append(row[["Nível", "Valor", "Distância"]].to_dict())
+
+    if not inserido:
+        linhas_ordenadas.append({
+            "Nível": "💰 Preço Atual",
+            "Valor": f"{preco:.2f}",
+            "Distância": "{:+.2f}%".format(0)
+        })
+
+    df_final = pd.DataFrame(linhas_ordenadas).set_index("Nível")
+    return df_final
 
 if executar:
     st.session_state.recomendacoes = []
-    screener = Overview()
-    screener.set_filter(filters_dict={"Performance": performance, "Average Volume": "Over 300K"})
-    tickers = screener.screener_view()['Ticker'].tolist()
 
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+    f = io.StringIO()
+
+    with redirect_stdout(f), redirect_stderr(f):
+        with st.spinner("🔄 Buscando ativos..."):
+            screener = Overview()
+            screener.set_filter(filters_dict={"Performance": performance, "Average Volume": "Over 300K"})
+            tickers_df = screener.screener_view()
+
+    # Captura o log impresso pela finvizfinance
+    log_output = f.getvalue()
+    matches = re.findall(r'loading page.*?\[(.*?)\].*?(\d+)/(\d+)', log_output)
+
+    # Atualiza progresso com base na última linha de progresso (se houver)
+    if matches:
+        current, total = map(int, matches[-1][1:])
+        percent = current / total
+        progress_bar.progress(percent)
+        status_text.text(f"📄 Página {current} de {total} ({int(percent * 100)}%)")
+    else:
+        status_text.text("✅ Ativos carregados.")
+
+    # Não exibe o texto bruto das páginas
+    tickers = tickers_df['Ticker'].tolist()
+    st.success(f"✅ {len(tickers)} ativos carregados.")
+
+    # --- Análise técnica por ticker
     progress = st.progress(0)
     status_text = st.empty()
 
     for i, ticker in enumerate(tickers):
-        status_text.text(f"\U0001F50D Analisando {ticker} ({i+1}/{len(tickers)})...")
+        status_text.text(f"🔍 Analisando {ticker} ({i+1}/{len(tickers)})...")
         try:
             df = yf.download(ticker, period="18mo", interval="1d", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
             df = calcular_indicadores(df, dias_breakout, threshold)
 
-            if ordenamento_mm:
-                if not (df['EMA20'].iloc[-1] > df['SMA50'].iloc[-1] > df['SMA150'].iloc[-1] > df['SMA200'].iloc[-1]):
-                    continue
+            if ordenamento_mm and not (df['EMA20'].iloc[-1] > df['SMA50'].iloc[-1] > df['SMA150'].iloc[-1] > df['SMA200'].iloc[-1]):
+                continue
 
-            if sma200_crescente:
-                if len(df) < 30 or df['SMA200'].iloc[-1] <= df['SMA200'].iloc[-30]:
-                    continue
+            if sma200_crescente and (len(df) < 30 or df['SMA200'].iloc[-1] <= df['SMA200'].iloc[-30]):
+                continue
 
             momentum_cond = df['momentum_up'].iloc[-lookback:].any()
             breakout_cond = df['rompe_resistencia'].iloc[-lookback:].any()
@@ -748,8 +805,7 @@ if executar:
 
             with st.container():
                 st.subheader(f"{ticker} - {nome}")
-
-                col1, col2 = st.columns([3, 1])  # proporção 75% gráfico, 25% info
+                col1, col2 = st.columns([3, 2])
 
                 with col1:
                     with st.spinner(f"📊 Carregando gráfico de {ticker}..."):
@@ -757,13 +813,71 @@ if executar:
                         st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker}")
 
                 with col2:
-                    st.markdown("### 📊 Resumo")
-                    st.markdown(f"📅 **Earnings:** {earnings_str}")
-                    st.markdown(f"📉 **Risco:** `{risco}`")
-                    st.markdown("🧠 **Análise Técnica:**")
                     st.markdown(comentario)
+                    st.markdown(f"📅 **Resultado:** {earnings_str}")
+                    st.markdown(f"📉 **Risco:** `{risco}`")
 
+                    preco = df["Close"].iloc[-1]
+                    PP, suportes, resistencias = calcular_pivot_points(df)
+                    dists_resist = [(r, ((r - preco) / preco) * 100) for r in resistencias]
+                    dists_suportes = [(s, ((s - preco) / preco) * 100) for s in suportes]
 
+                    resist_ordenado = sorted([r for r in dists_resist if r[0] > preco], key=lambda x: x[0])[:3]
+                    suporte_ordenado = sorted([s for s in dists_suportes if s[0] < preco], key=lambda x: -x[0])[:3]
+
+                    niveis = []
+
+                    for i, (valor, _) in enumerate(resist_ordenado):
+                        niveis.append({"Nível": f"🔺 {i + 1}ª Resistência", "Valor": valor})
+
+                    for i, (valor, _) in enumerate(suporte_ordenado):
+                        niveis.append({"Nível": f"🔻 {i + 1}º Suporte", "Valor": valor})
+
+                    swing_high = df["High"].rolling(40).max().iloc[-1]
+                    swing_low = df["Low"].rolling(40).min().iloc[-1]
+                    retracao_382 = swing_high - (swing_high - swing_low) * 0.382
+                    retracao_618 = swing_high - (swing_high - swing_low) * 0.618
+
+                    indicadores = {
+                        "SMA 20": df["SMA20"].iloc[-1],
+                        "SMA 50": df["SMA50"].iloc[-1],
+                        "SMA 150": df["SMA150"].iloc[-1],
+                        "SMA 200": df["SMA200"].iloc[-1],
+                        "Máxima 52s": df["High"].rolling(252).max().iloc[-1],
+                        "Mínima 52s": df["Low"].rolling(252).min().iloc[-1],
+                        "Retração 38.2% (últ. 40d)": retracao_382,
+                        "Retração 61.8% (últ. 40d)": retracao_618
+                    }
+
+                    for nome_ind, valor in indicadores.items():
+                        if "SMA" in nome_ind:
+                            nivel_nome = f"🟣 {nome_ind}"
+                        elif "Retração" in nome_ind:
+                            nivel_nome = f"📏 {nome_ind}"
+                        elif "Máxima" in nome_ind:
+                            nivel_nome = f"📈 {nome_ind}"
+                        elif "Mínima" in nome_ind:
+                            nivel_nome = f"📉 {nome_ind}"
+                        else:
+                            nivel_nome = nome_ind
+                        niveis.append({"Nível": nivel_nome, "Valor": valor})
+
+                    df_niveis = inserir_preco_no_meio(niveis, preco)
+
+                    def highlight_niveis(row):
+                        nivel = row.name
+                        if "Preço Atual" in nivel:
+                            return ["background-color: #fff3b0; font-weight: bold;"] * len(row)
+                        elif "🔺" in nivel:
+                            return ["color: #1f77b4; font-weight: bold;"] * len(row)
+                        elif "🔻" in nivel:
+                            return ["color: #2ca02c; font-weight: bold;"] * len(row)
+                        elif any(tag in nivel for tag in ["🟣", "📏", "📈", "📉"]):
+                            return ["color: #9467bd; font-style: italic;"] * len(row)
+                        return [""] * len(row)
+
+                    styled_table = df_niveis.style.apply(highlight_niveis, axis=1)
+                    st.dataframe(styled_table, use_container_width=True, height=600)
 
             st.session_state.recomendacoes.append({
                 "Ticker": ticker,
@@ -804,15 +918,15 @@ if ticker_manual:
     st.subheader(f"{ticker_manual} - {nome}")
     col1, col2 = st.columns([3, 2])
 
+
     with col1:
         with st.spinner(f"Carregando gráfico de {ticker_manual}..."):
             fig = plot_ativo(df, ticker_manual, nome, vcp_detectado)
             st.plotly_chart(fig, use_container_width=True, key=f"plot_{ticker_manual}_manual")
 
     with col2:
-        st.markdown("### 📊 Resumo")
         st.markdown(comentario)
-        st.markdown(f"📅 Próximo resultado: {earnings_str}")
+        st.markdown(f"📅 Resultado: {earnings_str}")
 
         preco = df["Close"].iloc[-1]
         PP, suportes, resistencias = calcular_pivot_points(df)
@@ -843,8 +957,8 @@ if ticker_manual:
             "SMA 200": df["SMA200"].iloc[-1],
             "Máxima 52s": df["High"].rolling(252).max().iloc[-1],
             "Mínima 52s": df["Low"].rolling(252).min().iloc[-1],
-            "Retração 38.2% (últ. 40d)": retracao_382,
-            "Retração 61.8% (últ. 40d)": retracao_618
+            "Retração 38.2%": retracao_382,
+            "Retração 61.8%": retracao_618
         }
 
         for nome, valor in indicadores.items():
@@ -872,27 +986,27 @@ if ticker_manual:
         df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
 
         def highlight_niveis(row):
-            nivel = row["Nível"]
+            nivel = row.name  # Agora usa o índice, não a coluna
             if "Preço Atual" in nivel:
-                return ["background-color: #fff3b0; font-weight: bold;"] * 3
+                return ["background-color: #fff3b0; font-weight: bold;"] * len(row)
             elif "🔺" in nivel:
-                return ["color: #1f77b4; font-weight: bold;"] * 3
+                return ["color: #1f77b4; font-weight: bold;"] * len(row)
             elif "🔻" in nivel:
-                return ["color: #2ca02c; font-weight: bold;"] * 3
+                return ["color: #2ca02c; font-weight: bold;"] * len(row)
             elif any(tag in nivel for tag in ["🟣", "📏", "📈", "📉"]):
-                return ["color: #9467bd; font-style: italic;"] * 3
-            return [""] * 3
+                return ["color: #9467bd; font-style: italic;"] * len(row)
+            return [""] * len(row)
+
 
             # Ordena colunas corretamente
         df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
         df_niveis.reset_index(drop=True, inplace=True)  # garante índice único e ocultável
 
         # Exibe tabela
-        st.markdown("#### 🧭 Níveis Técnicos e Indicadores")
-        st.dataframe(
-            df_niveis
-            .style.apply(highlight_niveis, axis=1)
-            .hide(axis="index"),
-            use_container_width=True,
-            height=600
-        )
+        df_niveis = df_niveis[["Nível", "Valor", "Distância"]]  # apenas essas 3
+        df_niveis = df_niveis.dropna(how="all")  # remove linhas totalmente vazias
+        df_niveis = df_niveis[df_niveis["Valor"] != ""]  # remove linhas com campo vazio
+        df_niveis = df_niveis[df_niveis["Distância"] != ""]  # idem
+
+        df_niveis_styled = df_niveis.set_index("Nível").style.apply(highlight_niveis, axis=1)
+        st.dataframe(df_niveis_styled, use_container_width=True, height=600)
