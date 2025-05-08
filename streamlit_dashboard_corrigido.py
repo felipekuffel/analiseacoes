@@ -940,7 +940,7 @@ if executar:
 
                     styled_table = df_niveis.style.apply(highlight_niveis, axis=1)
                     st.dataframe(styled_table, use_container_width=True, height=565)
-                    df_resultado = get_quarterly_growth_table_yfinance(ticker_manual)
+                    df_resultado = get_quarterly_growth_table_yfinance(ticker)
                     if df_resultado is not None:
                         st.markdown("📊 **Histórico Trimestral (YoY)**")
                         st.table(df_resultado)
