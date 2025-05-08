@@ -4,7 +4,8 @@ pandas
 numpy
 finvizfinance
 plotly
-pyrebase
+pyrebase4
 firebase-admin
 cryptography
 streamlit-autorefresh
+pycryptodome
