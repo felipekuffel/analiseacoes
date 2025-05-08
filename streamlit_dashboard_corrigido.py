@@ -484,7 +484,7 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
                             line=dict(color="rgba(128,128,128,0.5)", dash="dot", width=1),
                         )
                         fig.add_annotation(
-                            x=date, y=0.2,
+                            x=date, y=1,
                             xref="x", yref="paper",
                             text="❗❗", showarrow=False,
                             font=dict(color="rgba(128,128,128,0.5)", size=10),
