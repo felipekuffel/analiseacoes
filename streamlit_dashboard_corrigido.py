@@ -484,9 +484,9 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
                             line=dict(color="rgba(128,128,128,0.5)", dash="dot", width=1),
                         )
                         fig.add_annotation(
-                            x=date, y=-1.1,
+                            x=date, y=1,
                             xref="x", yref="paper",
-                            text="Earnings", showarrow=False,
+                            text="🔥", showarrow=False,
                             font=dict(color="rgba(128,128,128,0.5)", size=10),
                             xanchor="left"
                         )
@@ -939,7 +939,7 @@ if executar:
                         return [""] * len(row)
 
                     styled_table = df_niveis.style.apply(highlight_niveis, axis=1)
-                    st.dataframe(styled_table, use_container_width=True, height=600)
+                    st.dataframe(styled_table, use_container_width=True, height=565)
                     df_resultado = get_quarterly_growth_table_yfinance(ticker_manual)
                     if df_resultado is not None:
                         st.markdown("📊 **Histórico Trimestral (YoY)**")
@@ -1085,7 +1085,7 @@ if ticker_manual:
         df_niveis.reset_index(drop=True, inplace=True)
 
         df_niveis_styled = df_niveis.set_index("Nível").style.apply(highlight_niveis, axis=1)
-        st.dataframe(df_niveis_styled, use_container_width=True, height=600)
+        st.dataframe(df_niveis_styled, use_container_width=True, height=565)
 
 
 
