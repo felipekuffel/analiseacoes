@@ -20,6 +20,10 @@ import io
 import sys
 from contextlib import redirect_stdout, redirect_stderr
 import re
+from finvizfinance.screener.overview import Overview
+import requests
+
+
 
 st.set_page_config(layout="wide")
 # Mantém o app ativo mesmo sem interação (a cada 8 minutos)
@@ -462,6 +466,33 @@ def plot_ativo(df, ticker, nome_empresa, vcp_detectado=False):
         # Anotação inferior: suporte
         fig.add_annotation(x=inicio, y=suporte,text=f"{suporte:.2f}",showarrow=False,font=dict(color="green", size=10),bgcolor="rgba(255, 255, 255, 0)",yanchor="top", xanchor="left")
 
+    try:
+        earnings_df = yf.Ticker(ticker).quarterly_financials.T
+        earnings_dates = [d.strftime('%Y-%m-%d') for d in earnings_df.index]
+        print("Datas earnings:", earnings_dates)
+        print("Datas no gráfico:", df['index_str'].tolist())
+
+
+        for date in earnings_dates:
+            if date in df['index_str'].values:
+                for date in earnings_dates:
+                    if date in df['index_str'].values:
+                        fig.add_shape(
+                            type="line",
+                            x0=date, x1=date,
+                            yref="paper", y0=0, y1=1,
+                            line=dict(color="rgba(128,128,128,0.5)", dash="dot", width=1),
+                        )
+                        fig.add_annotation(
+                            x=date, y=-1.1,
+                            xref="x", yref="paper",
+                            text="Earnings", showarrow=False,
+                            font=dict(color="rgba(128,128,128,0.5)", size=10),
+                            xanchor="left"
+                        )
+
+    except Exception as e:
+        print("Erro ao adicionar marcações de earnings:", e)
 
     return fig
 
@@ -539,31 +570,6 @@ def detectar_vcp(df):
 
     return True
 
-    min1 = lows[-60:-40].min()
-    min2 = lows[-40:-20].min()
-    min3 = lows[-20:].min()
-    if not (min1 < min2 < min3):
-        return False
-
-    # 2. Volume médio caindo
-    vol1 = volumes[-60:-40].mean()
-    vol2 = volumes[-40:-20].mean()
-    vol3 = volumes[-20:].mean()
-    if not (vol1 > vol2 > vol3):
-        return False
-
-    # 3. Redução do range (amplitude)
-    range1 = (highs[-60:-40] - lows[-60:-40]).mean()
-    range2 = (highs[-40:-20] - lows[-40:-20]).mean()
-    range3 = (highs[-20:] - lows[-20:]).mean()
-    if not (range1 > range2 > range3):
-        return False
-
-    # 4. Preço acima da média de 50 períodos
-    if closes.iloc[-1] < sma50.iloc[-1]:
-        return False
-
-    return True
 
 def calcular_pivot_points(df):
     high = df['High'].iloc[-2]
@@ -655,6 +661,62 @@ def gerar_comentario(df, risco, tendencia, vcp):
         comentario += f"\n📈 Sinais técnicos: {', '.join(sinais)}"
 
     return comentario
+
+
+def get_quarterly_growth_table_yfinance(ticker):
+    ticker_obj = yf.Ticker(ticker)
+    df = ticker_obj.quarterly_financials.T
+
+    if df.empty or "Total Revenue" not in df.columns or "Net Income" not in df.columns:
+        return None
+
+    df = df[["Total Revenue", "Net Income"]].dropna()
+    df.sort_index(ascending=False, inplace=True)
+
+    rows = []
+    for i in range(4):
+        try:
+            atual = df.iloc[i]
+            trimestre_data = df.index[i].date()
+            receita_atual = atual["Total Revenue"]
+            lucro_atual = atual["Net Income"]
+
+            receita_pct = None
+            lucro_pct = None
+            if i + 4 < len(df):
+                receita_ant = df.iloc[i + 4]["Total Revenue"]
+                lucro_ant = df.iloc[i + 4]["Net Income"]
+                if receita_ant:
+                    receita_pct = (receita_atual - receita_ant) / receita_ant * 100
+                if lucro_ant:
+                    lucro_pct = (lucro_atual - lucro_ant) / abs(lucro_ant) * 100
+
+            margem = (lucro_atual / receita_atual) * 100 if receita_atual else None
+
+            def fmt_pct(val):
+                if val is None:
+                    return ""
+                emoji = " 🚀" if val > 18 else ""
+                return f"{val:+.1f}%{emoji}"
+
+            rows.append({
+                "Trimestre": trimestre_data.strftime("%b %Y"),
+                "Receita (B)": f"${receita_atual / 1e9:.2f}B",
+                "Receita YoY": fmt_pct(receita_pct),
+                "Lucro (B)": f"${lucro_atual / 1e9:.2f}B",
+                "Lucro YoY": fmt_pct(lucro_pct),
+                "Margem (%)": f"{margem:.1f}%" if margem is not None else ""
+            })
+        except Exception:
+            continue
+
+    df_final = pd.DataFrame(rows).set_index("Trimestre")
+    return df_final
+
+
+
+
+
 
 
 
@@ -878,6 +940,13 @@ if executar:
 
                     styled_table = df_niveis.style.apply(highlight_niveis, axis=1)
                     st.dataframe(styled_table, use_container_width=True, height=600)
+                    df_resultado = get_quarterly_growth_table_yfinance(ticker_manual)
+                    if df_resultado is not None:
+                        st.markdown("📊 **Histórico Trimestral (YoY)**")
+                        st.table(df_resultado)
+                    else:
+                        st.warning("❌ Histórico de crescimento YoY não disponível.")
+
 
             st.session_state.recomendacoes.append({
                 "Ticker": ticker,
@@ -976,7 +1045,10 @@ if ticker_manual:
 
         niveis.append({"Nível": "💰 Preço Atual", "Valor": preco})
 
-        df_niveis = pd.DataFrame(niveis)
+        # Remove itens incompletos ou nulos antes de criar o DataFrame
+        niveis_filtrados = [n for n in niveis if n["Valor"] is not None and not pd.isna(n["Valor"])]
+        df_niveis = pd.DataFrame(niveis_filtrados)
+    
         df_niveis["DistânciaReal"] = (df_niveis["Valor"] - preco) / preco
         df_niveis["Distância"] = (df_niveis["DistânciaReal"] * 100).map("{:+.2f}%".format)
         df_niveis["Valor"] = df_niveis["Valor"].map("{:.2f}".format)
@@ -984,7 +1056,10 @@ if ticker_manual:
         df_niveis.drop(columns=["DistânciaReal"], inplace=True)
         df_niveis.reset_index(drop=True, inplace=True)
         df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
+        df_niveis = df_niveis.replace(r"^\s*$", np.nan, regex=True)
+        df_niveis = df_niveis.dropna(how="any")
 
+        
         def highlight_niveis(row):
             nivel = row.name  # Agora usa o índice, não a coluna
             if "Preço Atual" in nivel:
@@ -998,15 +1073,27 @@ if ticker_manual:
             return [""] * len(row)
 
 
-            # Ordena colunas corretamente
-        df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
-        df_niveis.reset_index(drop=True, inplace=True)  # garante índice único e ocultável
+
 
         # Exibe tabela
-        df_niveis = df_niveis[["Nível", "Valor", "Distância"]]  # apenas essas 3
-        df_niveis = df_niveis.dropna(how="all")  # remove linhas totalmente vazias
-        df_niveis = df_niveis[df_niveis["Valor"] != ""]  # remove linhas com campo vazio
-        df_niveis = df_niveis[df_niveis["Distância"] != ""]  # idem
+        df_niveis = df_niveis[["Nível", "Valor", "Distância"]]
+        df_niveis.reset_index(drop=True, inplace=True)
+
+        # Limpeza robusta de linhas vazias
+        df_niveis = df_niveis.replace(r"^\s*$", np.nan, regex=True)
+        df_niveis = df_niveis.dropna(how="any")
+        df_niveis.reset_index(drop=True, inplace=True)
 
         df_niveis_styled = df_niveis.set_index("Nível").style.apply(highlight_niveis, axis=1)
         st.dataframe(df_niveis_styled, use_container_width=True, height=600)
+
+
+
+        # 🔍 Crescimento Passado (Sales/EPS Q/Q)
+        # Busca dados Finviz somente para o ticker manual
+        df_resultado = get_quarterly_growth_table_yfinance(ticker_manual)
+        if df_resultado is not None:
+            st.markdown("📊 **Histórico Trimestral (YoY)**")
+            st.table(df_resultado)
+        else:
+            st.warning("❌ Histórico de crescimento YoY não disponível.")
