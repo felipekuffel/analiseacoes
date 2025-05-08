@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -17,6 +16,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.hazmat.primitives import serialization
 from streamlit_autorefresh import st_autorefresh
+import os
 
 st.set_page_config(layout="wide")
 # Mantém o app ativo mesmo sem interação (a cada 8 minutos)
@@ -33,44 +33,41 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 
-# Firebase Admin config via variáveis de ambiente
-firebase_admin_config = {
-    "type": os.getenv("FIREBASE_ADMIN_TYPE"),
-    "project_id": os.getenv("FIREBASE_ADMIN_PROJECT_ID"),
-    "private_key_id": os.getenv("FIREBASE_ADMIN_PRIVATE_KEY_ID"),
-    "private_key": os.getenv("FIREBASE_ADMIN_PRIVATE_KEY", "").replace("\\n", "\n"),
-    "client_email": os.getenv("FIREBASE_ADMIN_CLIENT_EMAIL"),
-    "client_id": os.getenv("FIREBASE_ADMIN_CLIENT_ID"),
-    "auth_uri": os.getenv("FIREBASE_ADMIN_AUTH_URI"),
-    "token_uri": os.getenv("FIREBASE_ADMIN_TOKEN_URI"),
-    "auth_provider_x509_cert_url": os.getenv("FIREBASE_ADMIN_AUTH_PROVIDER_CERT_URL"),
-    "client_x509_cert_url": os.getenv("FIREBASE_ADMIN_CLIENT_CERT_URL"),
-}
-
+# --- Verifica chave privada
 try:
-    cred = credentials.Certificate(firebase_admin_config)
-    if not firebase_admin._apps:
-        firebase_admin.initialize_app(cred)
+    key = st.secrets["firebase_admin"]["private_key"]
+    serialization.load_pem_private_key(key.encode(), password=None)
 except Exception as e:
-    st.error(f"Erro ao inicializar Firebase: {e}")
+    st.error(f"❌ Erro na chave privada: {e}")
     st.stop()
 
-# Pyrebase config (para login/autenticação de usuário)
+# --- Inicializa o Firebase Admin SDK
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate(dict(st.secrets["firebase_admin"]))
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Erro ao inicializar Firebase: {e}")
+        st.stop()
+
+# --- Configura Pyrebase ---
 firebase_config = {
-    "apiKey": os.getenv("FIREBASE_API_KEY"),
-    "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN"),
-    "projectId": os.getenv("FIREBASE_PROJECT_ID"),
-    "storageBucket": os.getenv("FIREBASE_STORAGE_BUCKET"),
-    "messagingSenderId": os.getenv("FIREBASE_MESSAGING_SENDER_ID"),
-    "appId": os.getenv("FIREBASE_APP_ID"),
-    "measurementId": os.getenv("FIREBASE_MEASUREMENT_ID"),
+    "apiKey": st.secrets["firebase_apiKey"],
+    "authDomain": st.secrets["firebase_authDomain"],
+    "projectId": st.secrets["firebase_projectId"],
+    "storageBucket": st.secrets["firebase_storageBucket"],
+    "messagingSenderId": st.secrets["firebase_messagingSenderId"],
+    "appId": st.secrets["firebase_appId"],
+    "measurementId": st.secrets.get("firebase_measurementId", None),
     "databaseURL": "https://breakmomemtum-default-rtdb.firebaseio.com"
 }
 
-# SMTP (envio de emails)
-DEFAULT_SMTP_EMAIL = "felipekuffel@gmail.com"
-DEFAULT_SMTP_SENHA = os.getenv("SMTP_SENHA")
+firebase = pyrebase.initialize_app(firebase_config)
+auth = firebase.auth()
 
+ADMIN_EMAILS = ["felipekuffel@gmail.com"]
+DEFAULT_SMTP_EMAIL = "felipekuffel@gmail.com"
+DEFAULT_SMTP_SENHA = st.secrets["smtp_senha"]
 
 # --- Login / Registro ---
 def login_firebase():
