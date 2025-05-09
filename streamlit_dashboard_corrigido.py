@@ -46,13 +46,18 @@ except Exception as e:
     st.stop()
 
 # --- Inicializa o Firebase Admin SDK
+# Inicializa Firebase (garantindo que databaseURL seja usado)
 if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(dict(st.secrets["firebase_admin"]))
-        firebase_admin.initialize_app(cred)
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": st.secrets["databaseURL"]
+        })
+        st.success(f"✅ Firebase inicializado com: {st.secrets['databaseURL']}")
     except Exception as e:
         st.error(f"Erro ao inicializar Firebase: {e}")
         st.stop()
+
 
 # --- Configura Pyrebase ---
 firebase_config = {
@@ -166,6 +171,16 @@ else:
 
 # --- Admin ---
 menu = st.session_state.menu_value
+# Corrige valor inicial do menu lateral e evita sobreposição
+opcoes_menu = ["Dashboard", "Carteira"]
+if st.session_state.get("email") in ADMIN_EMAILS:
+    opcoes_menu.append("Admin")
+
+if "menu_value" not in st.session_state or st.session_state.menu_value not in opcoes_menu:
+    st.session_state.menu_value = "Dashboard"
+
+menu = st.sidebar.radio("Menu", opcoes_menu, index=opcoes_menu.index(st.session_state.menu_value))
+st.session_state.menu_value = menu
 
 if menu == "Admin":
     st.title("Painel de Administração")
@@ -741,20 +756,21 @@ st.sidebar.markdown(f"**Usuário:** {st.session_state.user['email']}")
 
 # Define menu de acordo com o tipo de usuário
 if st.session_state.email in ADMIN_EMAILS:
-    menu_atual = st.sidebar.radio("Menu", ["Dashboard", "Admin"], key=f"menu_selector_{st.session_state.email}")
-
-    # Atualiza e força recarregamento se mudou
-    if st.session_state.get("menu_value") != menu_atual:
-        st.session_state.menu_value = menu_atual
-        st.rerun()
+    menu_atual = st.sidebar.radio("Menu", ["Dashboard", "Carteira", "Admin"], key=f"menu_selector_{st.session_state.email}")
 else:
-    st.session_state.menu_value = "Dashboard"
+    menu_atual = st.sidebar.radio("Menu", ["Dashboard", "Carteira"], key=f"menu_selector_{st.session_state.email}")
+
+# Atualiza e força recarregamento se mudou
+if st.session_state.get("menu_value") != menu_atual:
+    st.session_state.menu_value = menu_atual
+    st.rerun()
 
 # ✅ Botão de logout sempre visível
 if st.sidebar.button("🚪 Sair"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
+
 
 def inserir_preco_no_meio(niveis: list, preco: float) -> pd.DataFrame:
     df = pd.DataFrame(niveis)
@@ -1094,3 +1110,302 @@ if ticker_manual:
             st.table(df_resultado)
         else:
             st.warning("❌ Histórico de crescimento YoY não disponível.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 🔍 MENU CARTEIRA E SEU CONTEÚDO
+
+elif menu == "Carteira":
+    import streamlit as st
+    import pandas as pd
+    import numpy as np
+    from firebase_admin import credentials, auth as admin_auth, db
+    import firebase_admin
+    from cryptography.hazmat.primitives import serialization
+
+    import re
+
+    
+    # Esconde menu do Streamlit
+    hide_streamlit_style = """
+        <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+        </style>
+    """
+  
+    # Verifica chave privada Firebase
+    try:
+        key = st.secrets["firebase_admin"]["private_key"]
+        serialization.load_pem_private_key(key.encode(), password=None)
+    except Exception as e:
+        st.error(f"❌ Erro na chave privada: {e}")
+        st.stop()
+
+    # Inicializa Firebase
+    if not firebase_admin._apps:
+        try:
+            cred = credentials.Certificate(dict(st.secrets["firebase_admin"]))
+            firebase_admin.initialize_app(cred, {
+                "databaseURL": st.secrets["databaseURL"]
+            })
+        except Exception as e:
+            st.error(f"Erro ao inicializar Firebase: {e}")
+            st.stop()
+
+    # Verifica se usuário está autenticado corretamente
+    if "user" not in st.session_state or "localId" not in st.session_state.user:
+        st.error("Usuário não autenticado corretamente.")
+        st.stop()
+
+    # Define o caminho da referência da carteira
+    user_id = st.session_state.user["localId"]
+    ref = db.reference(f"carteiras/{user_id}/simulacoes")
+
+# ... [restante do código permanece igual] ..
+
+    import re
+
+    def limpar_chaves_invalidas(obj, path="root"):
+        if isinstance(obj, dict):
+            novo = {}
+            for k, v in obj.items():
+                k_str = str(k)
+                caminho_atual = f"{path}.{k_str}"
+                if not k_str or re.search(r'[.$#[\]/]', k_str):
+                    print(f"⚠️ Chave inválida ignorada em: {caminho_atual}")
+                    continue
+                novo[k_str] = limpar_chaves_invalidas(v, path=caminho_atual)
+            return novo
+        elif isinstance(obj, list):
+            return [limpar_chaves_invalidas(item, path=f"{path}[{i}]") for i, item in enumerate(obj)]
+        else:
+            return obj
+
+    dados_limpos = limpar_chaves_invalidas(st.session_state.simulacoes)
+    ref.set(dados_limpos)
+
+    
+
+    def limpar_chaves_invalidas(obj):
+        if isinstance(obj, dict):
+            novo = {}
+            for k, v in obj.items():
+                k_str = str(k)
+                if not k_str or re.search(r'[.$#[\]/]', k_str):
+                    continue  # ignora chaves inválidas
+                novo[k_str] = limpar_chaves_invalidas(v)
+            return novo
+        elif isinstance(obj, list):
+            return [limpar_chaves_invalidas(item) for item in obj]
+        else:
+            return obj
+
+    dados_limpos = limpar_chaves_invalidas(st.session_state.simulacoes)
+    ref.set(dados_limpos)
+
+
+    simulacoes_salvas = ref.get()
+    if "simulacoes" not in st.session_state:
+        st.session_state.simulacoes = simulacoes_salvas if simulacoes_salvas else []
+
+    if 'edit_index' in st.session_state:
+        sim = st.session_state.simulacoes[st.session_state.edit_index]
+        nome_default = sim['nome']
+        cotacao_default = sim['cotacao']
+        venda_pct_default = sim['venda_pct']
+        pl_total_default = sim['pl_total']
+    else:
+        nome_default = "ACMR"
+        cotacao_default = 28.87
+        venda_pct_default = 17.0
+        pl_total_default = 10000.0
+
+    with st.form("form_compras"):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            nome_acao = st.text_input("🔹 Nome da Ação", nome_default)
+        with col2:
+            cotacao = st.number_input("💲 Cotação Inicial de Compra", value=cotacao_default, step=0.01, format="%.2f")
+        with col3:
+            venda_pct = st.number_input("🎯 % de Ganho para Venda", value=venda_pct_default, step=0.1, format="%.2f")
+        with col4:
+            pl_total = st.number_input("💼 Capital Total (PL)", value=pl_total_default, step=100.0)
+
+        st.markdown("---")
+        st.subheader("📌 Configuração das Compras")
+        compra_data = []
+        for i, nome in enumerate(["COMPRA INICIAL", "COMPRA 2", "COMPRA 3"]):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                subida = 0.0 if i == 0 else st.number_input(f"🔼 {nome} - % de Subida", key=f"subida{i}", value=[0.0, 4.0, 10.0][i], step=0.1)
+            with col2:
+                pct_pl = st.number_input(f"📊 {nome} - % do PL", key=f"pct_pl{i}", value=[8.0, 6.0, 6.0][i], step=0.1)
+            with col3:
+                stop = st.number_input(f"🛑 {nome} - Stop (%)", key=f"stop{i}", value=[8.0, 8.0, 10.0][i], step=0.1)
+            compra_data.append({"nome": nome, "subida_pct": subida, "pct_pl": pct_pl, "stop_pct": stop})
+
+        enviado = st.form_submit_button("📥 Simular Compras")
+
+    if enviado:
+        if 'edit_index' in st.session_state:
+            del st.session_state.simulacoes[st.session_state.edit_index]
+            del st.session_state.edit_index
+        lucro = 0
+        total_valor = 0
+        total_unidades = 0
+        linhas = []
+        risco_acumulado_pct = []
+        risco_acumulado_rs = []
+
+        for i, compra in enumerate(compra_data):
+            preco = cotacao * (1 + compra["subida_pct"] / 100)
+            valor = pl_total * (compra["pct_pl"] / 100)
+            unidades = valor / preco
+            stop_preco = preco * (1 - compra["stop_pct"] / 100)
+            risco_valor = (preco - stop_preco) * unidades
+            risco_pct_pl = -risco_valor / pl_total * 100
+
+            total_valor += valor
+            total_unidades += unidades
+
+            if i >= 1:
+                risco_total_valor = sum([
+                    (cotacao * (1 + c["subida_pct"] / 100) * (c["pct_pl"] / 100) * pl_total /
+                    (cotacao * (1 + c["subida_pct"] / 100))) * c["stop_pct"] / 100
+                    for c in compra_data[:i + 1]
+                ])
+                risco_total_pct = -risco_total_valor / pl_total * 100
+            else:
+                risco_total_valor = ""
+                risco_total_pct = ""
+
+            risco_acumulado_pct.append(f"{risco_total_pct:.2f}%" if risco_total_pct != "" else "")
+            risco_acumulado_rs.append(f"$ {-risco_total_valor:.2f}" if risco_total_valor != "" else "")
+
+            linhas.append([
+                compra["nome"],
+                f"${preco:.2f}",
+                f"{compra['subida_pct']:.2f}%" if i > 0 else "Compra Inicial",
+                f"${valor:,.2f}",
+                f'{compra["pct_pl"]:.2f}%',
+                f"{int(unidades)} UN",
+                f'{compra["stop_pct"]:.2f}%',
+                f"$ {stop_preco:.2f}",
+                f"{risco_pct_pl:.2f}% PL",
+                f"$ {-risco_valor:.2f}",
+                risco_acumulado_pct[-1],
+                risco_acumulado_rs[-1]
+            ])
+
+        preco_final = cotacao * (1 + venda_pct / 100)
+        lucro = preco_final * total_unidades - total_valor
+        lucro_pct = lucro / total_valor * 100
+        lpl_pct = lucro / pl_total * 100
+
+        colunas = ["Etapa", "ADD", "% PARA COMPRA", "COMPRA PL", "% PL COMPRA", "QTD", "STOP", "$ STOP", "RISCO", "$ RISCO", "RISCO ACUMULADO %", "RISCO ACUMULADO $"]
+        df_tabela = pd.DataFrame(linhas, columns=colunas)
+
+        nova_simulacao = {
+            "nome": nome_acao,
+            "cotacao": cotacao,
+            "venda_pct": venda_pct,
+            "pl_total": pl_total,
+            "preco_final": preco_final,
+            "lucro": lucro,
+            "lucro_pct": lucro_pct,
+            "lpl_pct": lpl_pct,
+            "total_valor": total_valor,
+            "total_unidades": total_unidades,
+            "tabela": df_tabela.to_dict()
+        }
+        st.session_state.simulacoes.append(nova_simulacao)
+        import re
+
+        def limpar_chaves_invalidas(obj):
+            if isinstance(obj, dict):
+                novo = {}
+                for k, v in obj.items():
+                    if not k or re.search(r'[.$#[\]/]', k):
+                        continue  # ignora chaves inválidas
+                    novo[k] = limpar_chaves_invalidas(v)
+                return novo
+            elif isinstance(obj, list):
+                return [limpar_chaves_invalidas(item) for item in obj]
+            else:
+                return obj
+
+        # Limpa a estrutura antes de salvar
+        dados_limpos = limpar_chaves_invalidas(st.session_state.simulacoes)
+        ref.set(dados_limpos)
+
+    st.markdown("---")
+    st.subheader("📊 Simulações Salvas")
+
+    for idx, sim in enumerate(st.session_state.simulacoes):
+        with st.expander(f"📈 {sim['nome']}  •  Alvo: +{sim['venda_pct']:.1f}%  •  Lucro: ${sim['lucro']:.2f}"):
+            st.markdown(f"""
+            <div style='padding: 1rem; background-color: #f0f2f6; border-radius: 10px; font-size: 16px;'>
+            <strong>Simulação para:</strong> {sim['nome']}  |  
+            <strong>Meta de venda:</strong> +{sim['venda_pct']:.2f}% (alvo: $ {sim['preco_final']:.2f})  |  
+            <strong>Qtd total:</strong> {int(sim['total_unidades'])} ações  |  
+            <strong>Total investido:</strong> $ {sim['total_valor']:.2f}  |  
+            <strong>Lucro estimado:</strong> $ {sim['lucro']:.2f} ({sim['lucro_pct']:.2f}%)  |  
+            <strong>L/PL:</strong> {sim['lpl_pct']:.2f}%
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.dataframe(pd.DataFrame(sim["tabela"], columns=sim["tabela"].keys()), use_container_width=True, hide_index=True)
+
+            col_ed, col_del = st.columns([1,1])
+            with col_ed:
+                if st.button(f"✏️ Editar {sim['nome']}", key=f"edit_{idx}"):
+                    st.session_state.edit_index = idx
+                    st.rerun()
+            with col_del:
+                if st.button(f"🗑 Excluir {sim['nome']}", key=f"del_{idx}"):
+                    del st.session_state.simulacoes[idx]
+                    ref.set(st.session_state.simulacoes)
+                    st.success("Simulação excluída com sucesso.")
+                    st.rerun()
+
+
+    #with st.expander(f"📈 {sim['nome']}  •  Alvo: {sim['preco_final']:.2f}  •  Lucro: ${sim['lucro']:.2f}"):
