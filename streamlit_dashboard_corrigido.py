@@ -1143,6 +1143,8 @@ if ticker_manual:
 
 # 🔍 MENU CARTEIRA E SEU CONTEÚDO
 
+# 🔍 MENU CARTEIRA E SEU CONTEÚDO
+
 elif menu == "Carteira":
     import streamlit as st
     import pandas as pd
@@ -1150,19 +1152,17 @@ elif menu == "Carteira":
     from firebase_admin import credentials, auth as admin_auth, db
     import firebase_admin
     from cryptography.hazmat.primitives import serialization
-
     import re
 
-    
     # Esconde menu do Streamlit
-    hide_streamlit_style = """
+    st.markdown("""
         <style>
             #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
         </style>
-    """
-  
-    # Verifica chave privada Firebase
+    """, unsafe_allow_html=True)
+
+    # Inicializa Firebase
     try:
         key = st.secrets["firebase_admin"]["private_key"]
         serialization.load_pem_private_key(key.encode(), password=None)
@@ -1170,7 +1170,6 @@ elif menu == "Carteira":
         st.error(f"❌ Erro na chave privada: {e}")
         st.stop()
 
-    # Inicializa Firebase
     if not firebase_admin._apps:
         try:
             cred = credentials.Certificate(dict(st.secrets["firebase_admin"]))
@@ -1181,18 +1180,16 @@ elif menu == "Carteira":
             st.error(f"Erro ao inicializar Firebase: {e}")
             st.stop()
 
-    # Verifica se usuário está autenticado corretamente
     if "user" not in st.session_state or "localId" not in st.session_state.user:
         st.error("Usuário não autenticado corretamente.")
         st.stop()
 
-    # Define o caminho da referência da carteira
     user_id = st.session_state.user["localId"]
     ref = db.reference(f"carteiras/{user_id}/simulacoes")
+    simulacoes_salvas = ref.get()
 
-# ... [restante do código permanece igual] ..
-
-    import re
+    if "simulacoes" not in st.session_state:
+        st.session_state.simulacoes = simulacoes_salvas if simulacoes_salvas else []
 
     def limpar_chaves_invalidas(obj, path="root"):
         if isinstance(obj, dict):
@@ -1209,33 +1206,6 @@ elif menu == "Carteira":
             return [limpar_chaves_invalidas(item, path=f"{path}[{i}]") for i, item in enumerate(obj)]
         else:
             return obj
-
-    dados_limpos = limpar_chaves_invalidas(st.session_state.simulacoes)
-    ref.set(dados_limpos)
-
-    
-
-    def limpar_chaves_invalidas(obj):
-        if isinstance(obj, dict):
-            novo = {}
-            for k, v in obj.items():
-                k_str = str(k)
-                if not k_str or re.search(r'[.$#[\]/]', k_str):
-                    continue  # ignora chaves inválidas
-                novo[k_str] = limpar_chaves_invalidas(v)
-            return novo
-        elif isinstance(obj, list):
-            return [limpar_chaves_invalidas(item) for item in obj]
-        else:
-            return obj
-
-    dados_limpos = limpar_chaves_invalidas(st.session_state.simulacoes)
-    ref.set(dados_limpos)
-
-
-    simulacoes_salvas = ref.get()
-    if "simulacoes" not in st.session_state:
-        st.session_state.simulacoes = simulacoes_salvas if simulacoes_salvas else []
 
     if 'edit_index' in st.session_state:
         sim = st.session_state.simulacoes[st.session_state.edit_index]
@@ -1279,7 +1249,7 @@ elif menu == "Carteira":
         if 'edit_index' in st.session_state:
             del st.session_state.simulacoes[st.session_state.edit_index]
             del st.session_state.edit_index
-        lucro = 0
+
         total_valor = 0
         total_unidades = 0
         linhas = []
@@ -1331,8 +1301,11 @@ elif menu == "Carteira":
         lucro_pct = lucro / total_valor * 100
         lpl_pct = lucro / pl_total * 100
 
-        colunas = ["Etapa", "ADD", "% PARA COMPRA", "COMPRA PL", "% PL COMPRA", "QTD", "STOP", "$ STOP", "RISCO", "$ RISCO", "RISCO ACUMULADO %", "RISCO ACUMULADO $"]
-        df_tabela = pd.DataFrame(linhas, columns=colunas)
+        df_tabela = pd.DataFrame(linhas, columns=[
+            "Etapa", "ADD", "% PARA COMPRA", "COMPRA PL", "% PL COMPRA",
+            "QTD", "STOP", "$ STOP", "RISCO", "$ RISCO",
+            "RISCO ACUMULADO %", "RISCO ACUMULADO $"
+        ])
 
         nova_simulacao = {
             "nome": nome_acao,
@@ -1347,25 +1320,9 @@ elif menu == "Carteira":
             "total_unidades": total_unidades,
             "tabela": df_tabela.to_dict()
         }
+
         st.session_state.simulacoes.append(nova_simulacao)
-        import re
-
-        def limpar_chaves_invalidas(obj):
-            if isinstance(obj, dict):
-                novo = {}
-                for k, v in obj.items():
-                    if not k or re.search(r'[.$#[\]/]', k):
-                        continue  # ignora chaves inválidas
-                    novo[k] = limpar_chaves_invalidas(v)
-                return novo
-            elif isinstance(obj, list):
-                return [limpar_chaves_invalidas(item) for item in obj]
-            else:
-                return obj
-
-        # Limpa a estrutura antes de salvar
-        dados_limpos = limpar_chaves_invalidas(st.session_state.simulacoes)
-        ref.set(dados_limpos)
+        ref.set(limpar_chaves_invalidas(st.session_state.simulacoes))
 
     st.markdown("---")
     st.subheader("📊 Simulações Salvas")
@@ -1385,7 +1342,7 @@ elif menu == "Carteira":
 
             st.dataframe(pd.DataFrame(sim["tabela"], columns=sim["tabela"].keys()), use_container_width=True, hide_index=True)
 
-            col_ed, col_del = st.columns([1,1])
+            col_ed, col_del = st.columns([1, 1])
             with col_ed:
                 if st.button(f"✏️ Editar {sim['nome']}", key=f"edit_{idx}"):
                     st.session_state.edit_index = idx
@@ -1393,9 +1350,6 @@ elif menu == "Carteira":
             with col_del:
                 if st.button(f"🗑 Excluir {sim['nome']}", key=f"del_{idx}"):
                     del st.session_state.simulacoes[idx]
-                    ref.set(st.session_state.simulacoes)
+                    ref.set(limpar_chaves_invalidas(st.session_state.simulacoes))
                     st.success("Simulação excluída com sucesso.")
                     st.rerun()
-
-
-    #with st.expander(f"📈 {sim['nome']}  •  Alvo: {sim['preco_final']:.2f}  •  Lucro: ${sim['lucro']:.2f}"):
