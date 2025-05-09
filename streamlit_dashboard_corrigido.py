@@ -171,16 +171,6 @@ else:
 
 # --- Admin ---
 menu = st.session_state.menu_value
-# Corrige valor inicial do menu lateral e evita sobreposição
-opcoes_menu = ["Dashboard", "Carteira"]
-if st.session_state.get("email") in ADMIN_EMAILS:
-    opcoes_menu.append("Admin")
-
-if "menu_value" not in st.session_state or st.session_state.menu_value not in opcoes_menu:
-    st.session_state.menu_value = "Dashboard"
-
-menu = st.sidebar.radio("Menu", opcoes_menu, index=opcoes_menu.index(st.session_state.menu_value))
-st.session_state.menu_value = menu
 
 if menu == "Admin":
     st.title("Painel de Administração")
