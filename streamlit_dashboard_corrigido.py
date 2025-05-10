@@ -1146,5 +1146,134 @@ if ticker_manual:
 # 🔍 MENU CARTEIRA E SEU CONTEÚDO
 
 elif menu == "Carteira":
+    import streamlit as st
+    import pandas as pd
+    import numpy as np
+    from firebase_admin import credentials, auth as admin_auth, db
+    import firebase_admin
+    from cryptography.hazmat.primitives import serialization
     
-               
+    st.set_page_config(layout="wide")
+    
+    # Esconde menu do Streamlit
+    hide_streamlit_style = """
+        <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+        </style>
+    """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+    
+    # Verifica chave privada Firebase
+    try:
+        key = st.secrets["firebase_admin"]["private_key"]
+        serialization.load_pem_private_key(key.encode(), password=None)
+    except Exception as e:
+        st.error(f"❌ Erro na chave privada: {e}")
+        st.stop()
+    
+    # Inicializa Firebase
+    if not firebase_admin._apps:
+        try:
+            cred = credentials.Certificate(dict(st.secrets["firebase_admin"]))
+            firebase_admin.initialize_app(cred, {
+                "databaseURL": st.secrets["databaseURL"]
+            })
+        except Exception as e:
+            st.error(f"Erro ao inicializar Firebase: {e}")
+            st.stop()
+    
+    # Verifica se usuário está autenticado corretamente
+    if "user" not in st.session_state or "localId" not in st.session_state.user:
+        st.error("Usuário não autenticado corretamente.")
+        st.stop()
+    
+    # Caminhos no banco
+    user_id = st.session_state.user["localId"]
+    compras_ref = db.reference(f"carteiras/{user_id}/compras")
+    vendas_ref = db.reference(f"carteiras/{user_id}/vendas")
+    
+    # Adicionar nova compra
+    st.subheader("➕ Adicionar Compra")
+    with st.form("form_nova_compra"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            ticker = st.text_input("Ticker")
+        with col2:
+            preco = st.number_input("Preço de Compra", value=10.0, step=0.01)
+        with col3:
+            qtd = st.number_input("Quantidade", value=10, step=1)
+        enviar = st.form_submit_button("Salvar Compra")
+    
+    if enviar:
+        if ticker and preco > 0 and qtd > 0:
+            compras = compras_ref.child(ticker).get() or []
+            compras.append({"preco": preco, "qtd": qtd, "data": str(pd.Timestamp.today().date())})
+            compras_ref.child(ticker).set(compras)
+            st.success("Compra salva com sucesso!")
+            st.experimental_rerun()
+        else:
+            st.warning("Preencha todos os campos corretamente.")
+    
+    # Exibir compras atuais
+    st.subheader("📘 Compras Atuais")
+    compras_dict = compras_ref.get() or {}
+    
+    for ticker, compras in compras_dict.items():
+        total_qtd = sum(c["qtd"] for c in compras)
+        preco_medio = sum(c["preco"] * c["qtd"] for c in compras) / total_qtd if total_qtd > 0 else 0
+    
+        with st.expander(f"{ticker} | Total: {total_qtd} ações | PM: ${preco_medio:.2f}"):
+            df = pd.DataFrame(compras)
+            df.index = [f"Compra {i+1}" for i in range(len(compras))]
+            st.dataframe(df)
+    
+            with st.form(f"form_venda_{ticker}"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    preco_venda = st.number_input("Preço de Venda", min_value=0.0, value=preco_medio, step=0.01, key=f"preco_{ticker}")
+                with col2:
+                    qtd_venda = st.number_input("Qtd a Vender", min_value=1, max_value=int(total_qtd), value=int(total_qtd), step=1, key=f"qtd_{ticker}")
+                with col3:
+                    data_venda = st.date_input("Data da Venda", value=pd.Timestamp.today(), key=f"data_{ticker}")
+                vender = st.form_submit_button("💸 Registrar Venda")
+    
+            if vender:
+                lucro_total = (preco_venda - preco_medio) * qtd_venda
+                vendas_ref.push({
+                    "ticker": ticker,
+                    "preco_venda": preco_venda,
+                    "qtd_vendida": qtd_venda,
+                    "data": str(data_venda),
+                    "lucro_prejuizo": lucro_total
+                })
+    
+                qtd_restante = qtd_venda
+                novas_compras = []
+                for compra in compras:
+                    if qtd_restante <= 0:
+                        novas_compras.append(compra)
+                        continue
+                    if compra["qtd"] <= qtd_restante:
+                        qtd_restante -= compra["qtd"]
+                    else:
+                        compra["qtd"] -= qtd_restante
+                        novas_compras.append(compra)
+                        qtd_restante = 0
+                compras_ref.child(ticker).set(novas_compras)
+                st.success("Venda registrada com sucesso!")
+                st.experimental_rerun()
+    
+    # Mostrar histórico de vendas
+    st.markdown("---")
+    st.subheader("📄 Histórico de Vendas")
+    vendas = vendas_ref.get()
+    if vendas:
+        df_vendas = pd.DataFrame.from_dict(vendas, orient="index")
+        df_vendas["lucro_prejuizo"] = df_vendas["lucro_prejuizo"].astype(float)
+        df_vendas["lucro_prejuizo"] = df_vendas["lucro_prejuizo"].map("${:,.2f}".format)
+        st.dataframe(df_vendas)
+    else:
+        st.info("Nenhuma venda registrada ainda.")
+        
+                   
