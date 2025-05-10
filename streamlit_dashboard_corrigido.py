@@ -1146,7 +1146,7 @@ if ticker_manual:
 # 🔍 MENU CARTEIRA E SEU CONTEÚDO
 
 elif menu == "Carteira":
-        import streamlit as st
+    import streamlit as st
     import pandas as pd
     import numpy as np
     from firebase_admin import credentials, auth as admin_auth, db
