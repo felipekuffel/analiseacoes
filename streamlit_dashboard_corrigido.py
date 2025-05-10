@@ -1153,7 +1153,6 @@ elif menu == "Carteira":
     import firebase_admin
     from cryptography.hazmat.primitives import serialization
     
-    st.set_page_config(layout="wide")
     
     # Esconde menu do Streamlit
     hide_streamlit_style = """
