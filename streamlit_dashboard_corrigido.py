@@ -1146,15 +1146,16 @@ if ticker_manual:
 # 🔍 MENU CARTEIRA E SEU CONTEÚDO
 
 elif menu == "Carteira":
-        import streamlit as st
+    import streamlit as st
     import pandas as pd
     import numpy as np
     from firebase_admin import credentials, auth as admin_auth, db
     import firebase_admin
     from cryptography.hazmat.primitives import serialization
+    from datetime import datetime
     
+   
     
-    # Esconde menu do Streamlit
     hide_streamlit_style = """
         <style>
             #MainMenu {visibility: hidden;}
@@ -1187,71 +1188,77 @@ elif menu == "Carteira":
         st.error("Usuário não autenticado corretamente.")
         st.stop()
     
-    # Define o caminho da referência da carteira
     user_id = st.session_state.user["localId"]
-    ref = db.reference(f"carteiras/{user_id}/operacoes")
-    finalizados_ref = db.reference(f"carteiras/{user_id}/finalizados")
+    ref_ativos = db.reference(f"carteiras/{user_id}/ativos")
+    ref_finalizados = db.reference(f"carteiras/{user_id}/finalizados")
     
-    st.title("📘 Carteira de Ações")
+    st.title("Carteira de Ativos")
     
-    operacoes = ref.get() or {}
-    finalizados = finalizados_ref.get() or {}
+    ativos = ref_ativos.get() or {}
     
-    st.subheader("📂 Ativos em carteira")
-    for ticker, ops in operacoes.items():
-        total_qtd = sum([op["qtd"] for op in ops if "qtd" in op])
-        preco_medio = sum([op["qtd"] * op["preco"] for op in ops]) / total_qtd if total_qtd > 0 else 0
+    for ticker, operacoes in ativos.items():
+        total_qtd = sum(op['quantidade'] for op in operacoes)
+        preco_medio = sum(op['preco'] * op['quantidade'] for op in operacoes) / total_qtd
+        st.subheader(f"{ticker} - {total_qtd} ações @ R$ {preco_medio:.2f}")
     
-        st.markdown(f"### {ticker} - {total_qtd} ações @ {preco_medio:.2f}")
-        for i, op in enumerate(ops):
-            col1, col2, col3 = st.columns([2, 2, 2])
-            with col1:
-                st.markdown(f"**Compra {i+1}** - {op['qtd']} ações @ {op['preco']:.2f}")
-            with col2:
-                if f"venda_{ticker}_{i}" not in st.session_state:
-                    st.session_state[f"venda_{ticker}_{i}"] = False
-                if st.button(f"🛒 Vender {ticker} - Compra {i+1}", key=f"btn_venda_{ticker}_{i}"):
-                    st.session_state[f"venda_{ticker}_{i}"] = True
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button(f"Vender {ticker}"):
+                st.session_state.vendendo = ticker
     
-            if st.session_state[f"venda_{ticker}_{i}"]:
-                with col3:
-                    st.markdown("**Registrar venda:**")
-                    preco_venda = st.number_input("Preço de venda", key=f"preco_venda_{ticker}_{i}", value=op["preco"], format="%.2f")
-                    qtd_venda = st.number_input("Quantidade vendida", key=f"qtd_venda_{ticker}_{i}", value=op["qtd"], step=1)
-                    data_venda = st.date_input("Data da venda", key=f"data_venda_{ticker}_{i}")
-                    if st.button("Confirmar Venda", key=f"confirmar_venda_{ticker}_{i}"):
-                        qtd_restante = op["qtd"] - qtd_venda
-                        lucro = (preco_venda - op["preco"]) * qtd_venda
-                        venda_data = {
-                            "ticker": ticker,
-                            "preco_compra": op["preco"],
-                            "qtd_vendida": qtd_venda,
-                            "preco_venda": preco_venda,
-                            "lucro": lucro,
-                            "data_venda": str(data_venda),
-                            "data_compra": op.get("data", "")
-                        }
-                        finalizados.setdefault(ticker, []).append(venda_data)
-                        finalizados_ref.set(finalizados)
+        with col2:
+            if st.button(f"Nova Compra {ticker}"):
+                nova_operacao = {
+                    "data": datetime.today().strftime("%Y-%m-%d"),
+                    "preco": round(np.random.uniform(10, 50), 2),  # Placeholder
+                    "quantidade": np.random.randint(1, 20)
+                }
+                operacoes.append(nova_operacao)
+                ref_ativos.child(ticker).set(operacoes)
+                st.experimental_rerun()
     
-                        if qtd_restante > 0:
-                            ops[i]["qtd"] = qtd_restante
-                            ref.child(ticker).set(ops)
+        if st.session_state.get("vendendo") == ticker:
+            with st.form(f"venda_form_{ticker}"):
+                data_venda = st.date_input("Data da Venda", value=datetime.today())
+                preco_venda = st.number_input("Preço da Venda", min_value=0.01)
+                qtd_vendida = st.number_input("Quantidade Vendida", min_value=1, max_value=total_qtd, step=1)
+                submitted = st.form_submit_button("Confirmar Venda")
+    
+                if submitted:
+                    qtd_restante = qtd_vendida
+                    realizadas = []
+                    novas_ops = []
+                    for op in operacoes:
+                        if qtd_restante <= 0:
+                            novas_ops.append(op)
+                            continue
+                        if op['quantidade'] <= qtd_restante:
+                            realizadas.append({"preco_compra": op['preco'], "quantidade": op['quantidade'], "data": op['data']})
+                            qtd_restante -= op['quantidade']
                         else:
-                            ops.pop(i)
-                            if ops:
-                                ref.child(ticker).set(ops)
-                            else:
-                                ref.child(ticker).delete()
+                            realizadas.append({"preco_compra": op['preco'], "quantidade": qtd_restante, "data": op['data']})
+                            novas_ops.append({"preco": op['preco'], "quantidade": op['quantidade'] - qtd_restante, "data": op['data']})
+                            qtd_restante = 0
     
-                        st.success("Venda registrada com sucesso.")
-                        st.rerun()
+                    lucro_total = sum((preco_venda - r['preco_compra']) * r['quantidade'] for r in realizadas)
+                    ref_ativos.child(ticker).set(novas_ops if novas_ops else None)
+    
+                    finalizado = {
+                        "ticker": ticker,
+                        "quantidade": qtd_vendida,
+                        "preco_venda": preco_venda,
+                        "data_venda": data_venda.strftime("%Y-%m-%d"),
+                        "lucro": round(lucro_total, 2),
+                        "operacoes": realizadas
+                    }
+                    ref_finalizados.push(finalizado)
+                    st.success(f"Venda registrada com lucro total de R$ {lucro_total:.2f}")
+                    del st.session_state.vendendo
+                    st.experimental_rerun()
     
     st.markdown("---")
-    st.subheader("📉 Ativos Finalizados")
-    for ticker, vendas in finalizados.items():
-        st.markdown(f"### {ticker}")
-        df = pd.DataFrame(vendas)
-        df["lucro"] = df["lucro"].map("${:,.2f}".format)
-        st.dataframe(df, use_container_width=True)
+    st.subheader("Ativos Finalizados")
+    finalizados = ref_finalizados.get() or {}
     
+    for k, f in finalizados.items():
+        st.markdown(f"**{f['ticker']}** - {f['quantidade']} ações vendidas a R$ {f['preco_venda']:.2f} em {f['data_venda']} - Lucro: R$ {f['lucro']:.2f}")
